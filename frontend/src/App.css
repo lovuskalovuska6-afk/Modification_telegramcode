@@ -4,7 +4,6 @@
   flex-direction: column;
 }
 
-/* ===== Themes ===== */
 .theme-dark {
   --bg: #0e1621;
   --sidebar: #17212b;
@@ -15,6 +14,7 @@
   --accent-hover: #3a6a9a;
   --border: #0e1621;
   --input-bg: #242f3d;
+  --error: #e53935;
 }
 
 .theme-light {
@@ -27,9 +27,9 @@
   --accent-hover: #2a7fd4;
   --border: #e0e0e0;
   --input-bg: #f4f4f5;
+  --error: #d32f2f;
 }
 
-/* ===== Login ===== */
 .login-screen {
   height: 100%;
   display: flex;
@@ -59,6 +59,15 @@
   margin-bottom: 20px;
 }
 
+.error {
+  background: var(--error);
+  color: white;
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
 .login-input {
   width: 100%;
   padding: 12px 14px;
@@ -83,8 +92,13 @@
   margin-top: 6px;
 }
 
-.login-box button:hover {
+.login-box button:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+
+.login-box button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .login-box button.secondary {
@@ -118,7 +132,6 @@
   font-size: 14px;
 }
 
-/* ===== Main layout ===== */
 .main-layout {
   display: flex;
   height: 100%;
@@ -178,7 +191,7 @@
 
 .panel p {
   color: var(--text-secondary);
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .toggle {
@@ -222,4 +235,13 @@
 
 .panel textarea {
   resize: vertical;
+}
+
+.panel button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
 }

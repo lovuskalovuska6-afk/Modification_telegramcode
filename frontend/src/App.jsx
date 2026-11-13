@@ -1,23 +1,77 @@
 import React, { useState } from 'react'
 import './App.css'
 
+const API_URL = 'http://localhost:8000/api'
+
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [loginStep, setLoginStep] = useState('phone') // phone | code | qr
+  const [loginStep, setLoginStep] = useState('phone') // phone | code | 2fa | qr
   const [phone, setPhone] = useState('')
   const [code, setCode] = useState('')
-  const [activeMenu, setActiveMenu] = useState('chats')
-  const [theme, setTheme] = useState('dark') // dark | light
+  const [password2fa, setPassword2fa] = useState('')
+  const [user, setUser] = useState(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const handleSendCode = () => {
-    if (phone.trim().length < 8) return
-    // Здесь потом будет реальный запрос к бэкенду
-    setLoginStep('code')
+  const [activeMenu, setActiveMenu] = useState('chats')
+  const [theme, setTheme] = useState('dark')
+
+  const handleSendCode = async () => {
+    if (phone.trim().length < 8) {
+      setError('Введите корректный номер')
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`${API_URL}/auth/send-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      })
+      const data = await res.json()
+      if (data.status === 'code_sent' || data.status === 'already_authorized') {
+        if (data.status === 'already_authorized') {
+          setIsLoggedIn(true)
+        } else {
+          setLoginStep('code')
+        }
+      } else {
+        setError(data.message || data.detail || 'Ошибка отправки кода')
+      }
+    } catch (e) {
+      setError('Не удалось связаться с сервером. Запущен ли backend?')
+    }
+    setLoading(false)
   }
 
-  const handleLogin = () => {
-    // Здесь потом будет проверка кода через Telethon
-    setIsLoggedIn(true)
+  const handleSignIn = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`${API_URL}/auth/sign-in`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone,
+          code,
+          password: password2fa || null,
+        }),
+      })
+      const data = await res.json()
+
+      if (data.status === 'success') {
+        setUser(data.user)
+        setIsLoggedIn(true)
+      } else if (data.status === '2fa_required') {
+        setLoginStep('2fa')
+      } else {
+        setError(data.message || data.detail || 'Ошибка входа')
+      }
+    } catch (e) {
+      setError('Ошибка соединения с сервером')
+    }
+    setLoading(false)
   }
 
   const menuItems = [
@@ -37,7 +91,15 @@ function App() {
       case 'settings':
         return <div className="panel"><h2>Настройки</h2><p>Общие настройки клиента</p></div>
       case 'chats':
-        return <div className="panel"><h2>Чаты</h2><p>Здесь будет список чатов</p></div>
+        return (
+          <div className="panel">
+            <h2>Чаты</h2>
+            {user && (
+              <p>Вы вошли как: <b>{user.first_name} {user.last_name || ''}</b> (@{user.username || 'нет'})</p>
+            )}
+            <p>Здесь будет список чатов</p>
+          </div>
+        )
       case 'commands':
         return <div className="panel"><h2>Команды</h2><p>Управление командами и настройка ИИ</p></div>
       case 'ai':
@@ -53,7 +115,31 @@ function App() {
       case 'tg-settings':
         return <div className="panel"><h2>Настройки Telegram</h2><p>Настройки самого Telegram</p></div>
       case 'account':
-        return <div className="panel"><h2>Изменить аккаунт</h2><p>Смена аккаунта / выход</p></div>
+        return (
+          <div className="panel">
+            <h2>Аккаунт</h2>
+            {user && (
+              <div>
+                <p>ID: {user.id}</p>
+                <p>Имя: {user.first_name} {user.last_name || ''}</p>
+                <p>Username: @{user.username || 'нет'}</p>
+                <p>Телефон: {user.phone}</p>
+              </div>
+            )}
+            <button
+              style={{ marginTop: 16 }}
+              onClick={() => {
+                setIsLoggedIn(false)
+                setUser(null)
+                setLoginStep('phone')
+                setCode('')
+                setPassword2fa('')
+              }}
+            >
+              Выйти
+            </button>
+          </div>
+        )
       case 'custom-command':
         return (
           <div className="panel">
@@ -82,18 +168,8 @@ function App() {
           <div className="panel">
             <h2>Тема оформления</h2>
             <div className="theme-buttons">
-              <button
-                className={theme === 'dark' ? 'active' : ''}
-                onClick={() => setTheme('dark')}
-              >
-                Тёмная
-              </button>
-              <button
-                className={theme === 'light' ? 'active' : ''}
-                onClick={() => setTheme('light')}
-              >
-                Светлая
-              </button>
+              <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')}>Тёмная</button>
+              <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')}>Светлая</button>
             </div>
           </div>
         )
@@ -109,6 +185,8 @@ function App() {
           <div className="login-box">
             <h1>Modified Telegram</h1>
 
+            {error && <div className="error">{error}</div>}
+
             {loginStep === 'phone' && (
               <>
                 <p>Введите номер телефона</p>
@@ -119,7 +197,9 @@ function App() {
                   onChange={(e) => setPhone(e.target.value)}
                   className="login-input"
                 />
-                <button onClick={handleSendCode}>Получить код</button>
+                <button onClick={handleSendCode} disabled={loading}>
+                  {loading ? 'Отправка...' : 'Получить код'}
+                </button>
                 <button className="secondary" onClick={() => setLoginStep('qr')}>
                   Войти по QR-коду
                 </button>
@@ -136,9 +216,27 @@ function App() {
                   onChange={(e) => setCode(e.target.value)}
                   className="login-input"
                 />
-                <button onClick={handleLogin}>Войти</button>
+                <button onClick={handleSignIn} disabled={loading}>
+                  {loading ? 'Проверка...' : 'Войти'}
+                </button>
                 <button className="secondary" onClick={() => setLoginStep('phone')}>
                   Назад
+                </button>
+              </>
+            )}
+
+            {loginStep === '2fa' && (
+              <>
+                <p>Введите пароль двухфакторной аутентификации</p>
+                <input
+                  type="password"
+                  placeholder="Пароль 2FA"
+                  value={password2fa}
+                  onChange={(e) => setPassword2fa(e.target.value)}
+                  className="login-input"
+                />
+                <button onClick={handleSignIn} disabled={loading}>
+                  {loading ? 'Проверка...' : 'Подтвердить'}
                 </button>
               </>
             )}
@@ -146,9 +244,7 @@ function App() {
             {loginStep === 'qr' && (
               <>
                 <p>Отсканируйте QR-код в официальном приложении Telegram</p>
-                <div className="qr-placeholder">
-                  [ QR-код появится здесь ]
-                </div>
+                <div className="qr-placeholder">[ QR-код появится здесь ]</div>
                 <button className="secondary" onClick={() => setLoginStep('phone')}>
                   Войти по номеру
                 </button>
