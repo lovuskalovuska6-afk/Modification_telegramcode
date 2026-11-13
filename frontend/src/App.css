@@ -4,77 +4,146 @@
   flex-direction: column;
 }
 
+/* ===== Themes ===== */
+.theme-dark {
+  --bg: #0e1621;
+  --sidebar: #17212b;
+  --panel: #17212b;
+  --text: #ffffff;
+  --text-secondary: #8b9aab;
+  --accent: #2b5278;
+  --accent-hover: #3a6a9a;
+  --border: #0e1621;
+  --input-bg: #242f3d;
+}
+
+.theme-light {
+  --bg: #f0f2f5;
+  --sidebar: #ffffff;
+  --panel: #ffffff;
+  --text: #000000;
+  --text-secondary: #707579;
+  --accent: #3390ec;
+  --accent-hover: #2a7fd4;
+  --border: #e0e0e0;
+  --input-bg: #f4f4f5;
+}
+
+/* ===== Login ===== */
 .login-screen {
   height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(180deg, #0e1621 0%, #17212b 100%);
+  background: var(--bg);
+  color: var(--text);
 }
 
 .login-box {
-  background: #17212b;
+  background: var(--sidebar);
   padding: 40px;
   border-radius: 12px;
   text-align: center;
-  min-width: 320px;
+  min-width: 340px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.2);
 }
 
 .login-box h1 {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   font-size: 24px;
 }
 
 .login-box p {
-  color: #8b9aab;
-  margin-bottom: 24px;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+.login-input {
+  width: 100%;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 16px;
+  outline: none;
 }
 
 .login-box button {
-  background: #2b5278;
+  width: 100%;
+  background: var(--accent);
   color: white;
   border: none;
-  padding: 12px 32px;
+  padding: 12px;
   border-radius: 8px;
   cursor: pointer;
   font-size: 16px;
+  margin-top: 6px;
 }
 
 .login-box button:hover {
-  background: #3a6a9a;
+  background: var(--accent-hover);
+}
+
+.login-box button.secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.login-box button.secondary:hover {
+  background: var(--input-bg);
+}
+
+.qr-placeholder {
+  width: 200px;
+  height: 200px;
+  margin: 16px auto;
+  background: var(--input-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 .login-footer {
   position: absolute;
   bottom: 24px;
-  color: #6b7a8a;
+  color: var(--text-secondary);
   font-family: monospace;
   font-size: 14px;
 }
 
+/* ===== Main layout ===== */
 .main-layout {
   display: flex;
   height: 100%;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .sidebar {
   width: 280px;
-  background: #17212b;
-  border-right: 1px solid #0e1621;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
 }
 
 .sidebar-header {
   padding: 16px;
-  font-size: 24px;
-  cursor: pointer;
-  border-bottom: 1px solid #0e1621;
+  font-size: 18px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
 }
 
 .sidebar-menu {
   padding: 8px 0;
+  overflow-y: auto;
 }
 
 .menu-item {
@@ -84,18 +153,73 @@
 }
 
 .menu-item:hover {
-  background: #242f3d;
+  background: var(--input-bg);
 }
 
-.chat-area {
+.menu-item.active {
+  background: var(--accent);
+  color: white;
+}
+
+.content-area {
   flex: 1;
-  background: #0e1621;
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.panel {
+  padding: 32px;
+  max-width: 700px;
+}
+
+.panel h2 {
+  margin-bottom: 16px;
+}
+
+.panel p {
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.toggle {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
 }
 
-.chat-placeholder {
-  color: #6b7a8a;
-  font-size: 16px;
+.theme-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.theme-buttons button {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.theme-buttons button.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.panel select,
+.panel textarea {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-family: monospace;
+}
+
+.panel textarea {
+  resize: vertical;
 }
