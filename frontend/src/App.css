@@ -1,0 +1,101 @@
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.login-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: linear-gradient(180deg, #0e1621 0%, #17212b 100%);
+}
+
+.login-box {
+  background: #17212b;
+  padding: 40px;
+  border-radius: 12px;
+  text-align: center;
+  min-width: 320px;
+}
+
+.login-box h1 {
+  margin-bottom: 8px;
+  font-size: 24px;
+}
+
+.login-box p {
+  color: #8b9aab;
+  margin-bottom: 24px;
+}
+
+.login-box button {
+  background: #2b5278;
+  color: white;
+  border: none;
+  padding: 12px 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.login-box button:hover {
+  background: #3a6a9a;
+}
+
+.login-footer {
+  position: absolute;
+  bottom: 24px;
+  color: #6b7a8a;
+  font-family: monospace;
+  font-size: 14px;
+}
+
+.main-layout {
+  display: flex;
+  height: 100%;
+}
+
+.sidebar {
+  width: 280px;
+  background: #17212b;
+  border-right: 1px solid #0e1621;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 16px;
+  font-size: 24px;
+  cursor: pointer;
+  border-bottom: 1px solid #0e1621;
+}
+
+.sidebar-menu {
+  padding: 8px 0;
+}
+
+.menu-item {
+  padding: 12px 20px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.menu-item:hover {
+  background: #242f3d;
+}
+
+.chat-area {
+  flex: 1;
+  background: #0e1621;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-placeholder {
+  color: #6b7a8a;
+  font-size: 16px;
+}
