@@ -3,7 +3,6 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Получить на https://my.telegram.org
     API_ID: int = 0
     API_HASH: str = ""
 

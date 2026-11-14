@@ -1,22 +1,23 @@
-# Modified Telegram
+# TelegramCode
 
-Улучшенный клиент Telegram с дополнительными возможностями.
+Улучшенный клиент Telegram.
 
-## Возможности (в разработке)
+## Возможности
 
-- Вход по номеру телефона или QR-коду
+- Вход по номеру / QR
+- Регистрация нового аккаунта через сайт
 - Левое меню настроек
-- Система команд
 - ИИ автоответ
-- Редактор пользовательских команд (JS / Python / Lua)
+- Редактор команд (JS / Python / Lua)
 - Режим скрытности
-- Темы оформления
+- Тёмная и светлая тема
 
-## Быстрый старт
+## Запуск
 
-### 1. Получи API_ID и API_HASH
+### 1. API ключи Telegram
 
-Зайди на [https://my.telegram.org/apps](https://my.telegram.org/apps) и создай приложение.
+Зайди на https://my.telegram.org/apps и создай приложение.
+Скопируй `api_id` и `api_hash`.
 
 ### 2. Backend
 
@@ -27,7 +28,7 @@ source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# Отредактируй .env — вставь свой API_ID и API_HASH
+# Впиши API_ID и API_HASH в .env
 
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -42,19 +43,16 @@ npm run dev
 
 Открой http://localhost:5173
 
-## API авторизации
+## Поток авторизации
 
-- `POST /api/auth/send-code` — отправить код
-- `POST /api/auth/sign-in` — войти по коду (+ 2FA)
-- `POST /api/auth/logout` — выйти
-- `POST /api/auth/me` — информация о пользователе
+1. Экран «TelegramCode» → Начать
+2. Выбор: войти по номеру / QR / зарегистрироваться
+3. Номер → код → (если новый номер) имя + фамилия
+4. Готово
 
-## Структура
+## API
 
-```
-backend/app/
-  api/auth.py              # эндпоинты авторизации
-  client/telethon_manager.py  # работа с Telethon
-  features/                # будущие фичи
-frontend/src/              # React интерфейс
-```
+- `POST /api/auth/send-code`
+- `POST /api/auth/sign-in`
+- `POST /api/auth/logout`
+- `POST /api/auth/me`

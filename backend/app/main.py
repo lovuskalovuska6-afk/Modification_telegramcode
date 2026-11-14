@@ -5,7 +5,7 @@ from app.config import settings
 from app.api.auth import router as auth_router
 
 app = FastAPI(
-    title="Modified Telegram",
+    title="TelegramCode",
     description="Улучшенный клиент Telegram",
     version="0.1.0",
 )
@@ -18,7 +18,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем роуты
 app.include_router(auth_router, prefix="/api")
 
 
@@ -26,7 +25,7 @@ app.include_router(auth_router, prefix="/api")
 async def root():
     return {
         "status": "ok",
-        "message": "Modified Telegram API",
+        "message": "TelegramCode API",
         "version": "0.1.0",
     }
 
