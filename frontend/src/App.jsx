@@ -1,7 +1,11 @@
 import React, { useState } from 'react'
 import './App.css'
 
-const API_URL = 'http://localhost:8000/api'
+const API_URL = (() => {
+  const base = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  const normalized = base.startsWith('http') ? base : `https://${base}`
+  return `${normalized.replace(/\/$/, '')}/api`
+})()
 
 function App() {
   // screen: landing | auth-choice | phone | code | register | 2fa | qr | app
@@ -76,7 +80,6 @@ function App() {
       } else if (data.status === '2fa_required') {
         setScreen('2fa')
       } else if (data.status === 'need_signup') {
-        // Аккаунт новый — показываем форму регистрации
         setIsRegister(true)
         setScreen('register')
       } else {
@@ -204,7 +207,6 @@ function App() {
     }
   }
 
-  // ========== LANDING ==========
   if (screen === 'landing') {
     return (
       <div className={`app theme-${theme}`}>
@@ -223,7 +225,6 @@ function App() {
     )
   }
 
-  // ========== AUTH CHOICE ==========
   if (screen === 'auth-choice') {
     return (
       <div className={`app theme-${theme}`}>
@@ -255,7 +256,6 @@ function App() {
     )
   }
 
-  // ========== PHONE ==========
   if (screen === 'phone') {
     return (
       <div className={`app theme-${theme}`}>
@@ -284,7 +284,6 @@ function App() {
     )
   }
 
-  // ========== CODE ==========
   if (screen === 'code') {
     return (
       <div className={`app theme-${theme}`}>
@@ -313,7 +312,6 @@ function App() {
     )
   }
 
-  // ========== REGISTER (имя) ==========
   if (screen === 'register') {
     return (
       <div className={`app theme-${theme}`}>
@@ -346,7 +344,6 @@ function App() {
     )
   }
 
-  // ========== 2FA ==========
   if (screen === '2fa') {
     return (
       <div className={`app theme-${theme}`}>
@@ -372,7 +369,6 @@ function App() {
     )
   }
 
-  // ========== QR ==========
   if (screen === 'qr') {
     return (
       <div className={`app theme-${theme}`}>
@@ -391,7 +387,6 @@ function App() {
     )
   }
 
-  // ========== MAIN APP ==========
   return (
     <div className={`app theme-${theme}`}>
       <div className="main-layout">
