@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.api.auth import router as auth_router
-from app.client.telethon_manager import MOCK
+
+MOCK = settings.is_mock
 
 app = FastAPI(
     title="TelegramCode",
@@ -29,7 +30,9 @@ async def root():
         "message": "TelegramCode API",
         "version": "0.1.0",
         "mode": "mock" if MOCK else "real",
-        "has_api_keys": bool(settings.API_ID and settings.API_HASH),
+        "has_api_keys": settings.has_api_keys,
+        "api_id_set": bool(settings.API_ID),
+        "api_hash_len": len(settings.API_HASH or ""),
     }
 
 
@@ -38,7 +41,9 @@ async def health():
     return {
         "status": "healthy",
         "mock": MOCK,
-        "has_api_keys": bool(settings.API_ID and settings.API_HASH),
+        "has_api_keys": settings.has_api_keys,
+        "api_id_set": bool(settings.API_ID),
+        "api_hash_len": len(settings.API_HASH or ""),
     }
 
 

@@ -1,9 +1,4 @@
-"""
-Менеджер Telegram-клиентов (Telethon).
-
-MOCK включается через env MOCK=true или автоматически,
-если не заданы API_ID / API_HASH.
-"""
+"""Менеджер Telegram-клиентов (Telethon)."""
 
 from pathlib import Path
 from typing import Dict, Optional
@@ -30,16 +25,13 @@ class TelethonManager:
         return self.sessions_dir / f"{clean}.session"
 
     def _ensure_api_keys(self) -> Optional[dict]:
-        if not settings.API_ID or not settings.API_HASH:
+        if not settings.has_api_keys:
             return {
                 "status": "error",
                 "message": "На сервере не заданы API_ID и API_HASH. "
-                "Добавь их в Environment Variables на Render "
-                "(взять на https://my.telegram.org/apps).",
+                "Добавь их в Environment Variables на Render.",
             }
         return None
-
-    # ==================== MOCK ====================
 
     async def _mock_send_code(self, phone: str) -> dict:
         if phone in self.mock_users:
@@ -71,13 +63,11 @@ class TelethonManager:
             }
         if phone not in self.phone_code_hashes:
             return {"status": "error", "message": "Сначала запросите код"}
-
         if not first_name:
             return {
                 "status": "need_signup",
                 "message": "Аккаунт не найден. Нужна регистрация",
             }
-
         user_id = int(hashlib.md5(phone.encode()).hexdigest()[:8], 16) % 10_000_000
         user = {
             "id": user_id,
@@ -104,8 +94,6 @@ class TelethonManager:
         if not user:
             return {"status": "error", "message": "Не авторизован"}
         return {"status": "success", "user": user}
-
-    # ==================== REAL ====================
 
     async def _real_get_or_create_client(self, phone: str):
         from telethon import TelegramClient
@@ -249,7 +237,6 @@ class TelethonManager:
     async def _real_get_me(self, phone: str) -> dict:
         client = self.clients.get(phone)
         if not client:
-            # пробуем поднять сессию с диска
             try:
                 client = await self._real_get_or_create_client(phone)
             except Exception:
@@ -270,8 +257,6 @@ class TelethonManager:
             "username": me.username,
             "phone": me.phone,
         }
-
-    # ==================== PUBLIC ====================
 
     async def send_code(self, phone: str) -> dict:
         if MOCK:
