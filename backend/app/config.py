@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # Нужны только для реального режима (MOCK = False)
     API_ID: int = 0
     API_HASH: str = ""
 

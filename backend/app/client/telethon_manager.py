@@ -1,20 +1,22 @@
 """
-Менеджер Telethon-клиентов.
-Поддержка входа и регистрации новых аккаунтов.
+Менеджер клиентов.
+
+Режим MOCK = True  →  заглушка, работает без API_ID/API_HASH
+Режим MOCK = False →  реальный Telethon (нужны ключи в .env)
 """
 
 from pathlib import Path
 from typing import Dict, Optional
-
-from telethon import TelegramClient
-from telethon.errors import (
-    SessionPasswordNeededError,
-    PhoneNumberUnoccupiedError,
-    PhoneCodeInvalidError,
-    PhoneCodeExpiredError,
-)
+import hashlib
+import time
 
 from app.config import settings
+
+# ============================================
+# ВКЛЮЧЕНА ЗАГЛУШКА
+# Поставь False когда будут реальные API ключи
+# ============================================
+MOCK = True
 
 
 class TelethonManager:
@@ -22,14 +24,100 @@ class TelethonManager:
         self.sessions_dir = settings.SESSIONS_DIR
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
-        self.clients: Dict[str, TelegramClient] = {}
+        self.clients: Dict[str, object] = {}
         self.phone_code_hashes: Dict[str, str] = {}
+
+        # Для заглушки: храним "авторизованных" пользователей
+        self.mock_users: Dict[str, dict] = {}
+        self.mock_codes: Dict[str, str] = {}  # phone -> code
 
     def _session_path(self, phone: str) -> Path:
         clean = "".join(c for c in phone if c.isdigit())
         return self.sessions_dir / f"{clean}.session"
 
-    async def get_or_create_client(self, phone: str) -> TelegramClient:
+    # ==================== MOCK ====================
+
+    async def _mock_send_code(self, phone: str) -> dict:
+        if phone in self.mock_users:
+            return {
+                "status": "already_authorized",
+                "message": "Уже авторизован",
+                "user": self.mock_users[phone],
+            }
+
+        # Любой код принимаем, для удобства сохраняем "12345"
+        self.mock_codes[phone] = "12345"
+        self.phone_code_hashes[phone] = "mock_hash_" + phone
+
+        return {
+            "status": "code_sent",
+            "message": "Код отправлен (заглушка). Используй код: 12345",
+        }
+
+    async def _mock_sign_in(
+        self,
+        phone: str,
+        code: str,
+        password: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+    ) -> dict:
+        if phone in self.mock_users:
+            return {
+                "status": "success",
+                "message": "Уже авторизован",
+                "user": self.mock_users[phone],
+            }
+
+        if phone not in self.phone_code_hashes:
+            return {"status": "error", "message": "Сначала запросите код"}
+
+        # Принимаем любой код (или специально 12345)
+        if code.strip() not in ("12345", code.strip()):
+            # всё равно принимаем любой код в заглушке
+            pass
+
+        # Если имени нет — считаем что нужна регистрация
+        if not first_name:
+            return {
+                "status": "need_signup",
+                "message": "Аккаунт не найден. Нужна регистрация",
+            }
+
+        # Создаём фейкового пользователя
+        user_id = int(hashlib.md5(phone.encode()).hexdigest()[:8], 16) % 10_000_000
+        user = {
+            "id": user_id,
+            "first_name": first_name,
+            "last_name": last_name or "",
+            "username": None,
+            "phone": phone,
+        }
+        self.mock_users[phone] = user
+
+        return {
+            "status": "success",
+            "message": "Успешная регистрация (заглушка)",
+            "user": user,
+        }
+
+    async def _mock_logout(self, phone: str) -> dict:
+        self.mock_users.pop(phone, None)
+        self.mock_codes.pop(phone, None)
+        self.phone_code_hashes.pop(phone, None)
+        return {"status": "success", "message": "Вышли из аккаунта"}
+
+    async def _mock_get_me(self, phone: str) -> dict:
+        user = self.mock_users.get(phone)
+        if not user:
+            return {"status": "error", "message": "Не авторизован"}
+        return {"status": "success", "user": user}
+
+    # ==================== REAL (Telethon) ====================
+
+    async def _real_get_or_create_client(self, phone: str):
+        from telethon import TelegramClient
+
         if phone in self.clients:
             return self.clients[phone]
 
@@ -42,13 +130,12 @@ class TelethonManager:
             system_version="1.0",
             app_version="0.1.0",
         )
-
         await client.connect()
         self.clients[phone] = client
         return client
 
-    async def send_code(self, phone: str) -> dict:
-        client = await self.get_or_create_client(phone)
+    async def _real_send_code(self, phone: str) -> dict:
+        client = await self._real_get_or_create_client(phone)
 
         if await client.is_user_authorized():
             me = await client.get_me()
@@ -60,13 +147,9 @@ class TelethonManager:
 
         result = await client.send_code_request(phone)
         self.phone_code_hashes[phone] = result.phone_code_hash
+        return {"status": "code_sent", "message": "Код отправлен"}
 
-        return {
-            "status": "code_sent",
-            "message": "Код отправлен",
-        }
-
-    async def sign_in(
+    async def _real_sign_in(
         self,
         phone: str,
         code: str,
@@ -74,7 +157,14 @@ class TelethonManager:
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
     ) -> dict:
-        client = await self.get_or_create_client(phone)
+        from telethon.errors import (
+            SessionPasswordNeededError,
+            PhoneNumberUnoccupiedError,
+            PhoneCodeInvalidError,
+            PhoneCodeExpiredError,
+        )
+
+        client = await self._real_get_or_create_client(phone)
 
         if await client.is_user_authorized():
             me = await client.get_me()
@@ -98,7 +188,6 @@ class TelethonManager:
                 }
             await client.sign_in(password=password)
         except PhoneNumberUnoccupiedError:
-            # Номер свободен — нужна регистрация
             if not first_name:
                 return {
                     "status": "need_signup",
@@ -123,7 +212,7 @@ class TelethonManager:
             "user": self._user_dict(me),
         }
 
-    async def logout(self, phone: str) -> dict:
+    async def _real_logout(self, phone: str) -> dict:
         client = self.clients.get(phone)
         if client:
             try:
@@ -143,16 +232,12 @@ class TelethonManager:
         self.phone_code_hashes.pop(phone, None)
         return {"status": "success", "message": "Вышли из аккаунта"}
 
-    async def get_me(self, phone: str) -> dict:
+    async def _real_get_me(self, phone: str) -> dict:
         client = self.clients.get(phone)
         if not client or not await client.is_user_authorized():
             return {"status": "error", "message": "Не авторизован"}
-
         me = await client.get_me()
-        return {
-            "status": "success",
-            "user": self._user_dict(me),
-        }
+        return {"status": "success", "user": self._user_dict(me)}
 
     @staticmethod
     def _user_dict(me) -> dict:
@@ -163,6 +248,35 @@ class TelethonManager:
             "username": me.username,
             "phone": me.phone,
         }
+
+    # ==================== PUBLIC API ====================
+
+    async def send_code(self, phone: str) -> dict:
+        if MOCK:
+            return await self._mock_send_code(phone)
+        return await self._real_send_code(phone)
+
+    async def sign_in(
+        self,
+        phone: str,
+        code: str,
+        password: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+    ) -> dict:
+        if MOCK:
+            return await self._mock_sign_in(phone, code, password, first_name, last_name)
+        return await self._real_sign_in(phone, code, password, first_name, last_name)
+
+    async def logout(self, phone: str) -> dict:
+        if MOCK:
+            return await self._mock_logout(phone)
+        return await self._real_logout(phone)
+
+    async def get_me(self, phone: str) -> dict:
+        if MOCK:
+            return await self._mock_get_me(phone)
+        return await self._real_get_me(phone)
 
 
 telethon_manager = TelethonManager()

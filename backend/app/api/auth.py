@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-from app.client.telethon_manager import telethon_manager
+from app.client.telethon_manager import telethon_manager, MOCK
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -21,6 +21,15 @@ class SignInRequest(BaseModel):
 
 class PhoneRequest(BaseModel):
     phone: str
+
+
+@router.get("/mode")
+async def auth_mode():
+    """Показывает, включена ли заглушка."""
+    return {
+        "mock": MOCK,
+        "message": "Заглушка (demo)" if MOCK else "Реальный Telegram",
+    }
 
 
 @router.post("/send-code")

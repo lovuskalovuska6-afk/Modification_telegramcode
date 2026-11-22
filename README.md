@@ -2,40 +2,29 @@
 
 Улучшенный клиент Telegram.
 
-## Возможности
+## Сейчас включена ЗАГЛУШКА (demo-режим)
 
-- Вход по номеру / QR
-- Регистрация нового аккаунта через сайт
-- Левое меню настроек
-- ИИ автоответ
-- Редактор команд (JS / Python / Lua)
-- Режим скрытности
-- Тёмная и светлая тема
+Вход и регистрация работают **без** API_ID / API_HASH.
 
-## Запуск
+### Как тестировать
 
-### 1. API ключи Telegram
+1. Запусти backend и frontend
+2. Нажми «Начать»
+3. Выбери «Я не имею аккаунта» или «Войти по номеру»
+4. Введи любой номер (например `+79991234567`)
+5. Код: **`12345`** (или любой)
+6. Если регистрация — укажи имя
+7. Попадёшь внутрь клиента
 
-Зайди на https://my.telegram.org/apps и создай приложение.
-Скопируй `api_id` и `api_hash`.
-
-### 2. Backend
+### Запуск
 
 ```bash
+# Backend
 cd backend
-python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 
-cp .env.example .env
-# Впиши API_ID и API_HASH в .env
-
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### 3. Frontend
-
-```bash
+# Frontend (в другом терминале)
 cd frontend
 npm install
 npm run dev
@@ -43,16 +32,27 @@ npm run dev
 
 Открой http://localhost:5173
 
-## Поток авторизации
+### Переключение на реальный Telegram
 
-1. Экран «TelegramCode» → Начать
-2. Выбор: войти по номеру / QR / зарегистрироваться
-3. Номер → код → (если новый номер) имя + фамилия
-4. Готово
+В файле `backend/app/client/telethon_manager.py`:
 
-## API
+```python
+MOCK = False
+```
 
-- `POST /api/auth/send-code`
-- `POST /api/auth/sign-in`
-- `POST /api/auth/logout`
-- `POST /api/auth/me`
+И добавь в `backend/.env`:
+
+```
+API_ID=твой_id
+API_HASH=твой_hash
+```
+
+Ключи берутся на https://my.telegram.org/apps (только для сервера, пользователи их не видят).
+
+## Возможности
+
+- Экран TelegramCode → Начать
+- Вход по номеру / QR
+- Регистрация нового аккаунта
+- Левое меню
+- ИИ автоответ, команды, скрытность, темы
