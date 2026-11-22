@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.api.auth import router as auth_router
-
-MOCK = settings.is_mock
+from app.api.chats import router as chats_router
+from app.client.telethon_manager import MOCK
 
 app = FastAPI(
     title="TelegramCode",
     description="Улучшенный клиент Telegram",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 app.add_middleware(
@@ -21,6 +21,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/api")
+app.include_router(chats_router, prefix="/api")
 
 
 @app.get("/")
@@ -28,11 +29,9 @@ async def root():
     return {
         "status": "ok",
         "message": "TelegramCode API",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "mode": "mock" if MOCK else "real",
         "has_api_keys": settings.has_api_keys,
-        "api_id_set": bool(settings.API_ID),
-        "api_hash_len": len(settings.API_HASH or ""),
     }
 
 
@@ -45,14 +44,3 @@ async def health():
         "api_id_set": bool(settings.API_ID),
         "api_hash_len": len(settings.API_HASH or ""),
     }
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        "app.main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=True,
-    )
