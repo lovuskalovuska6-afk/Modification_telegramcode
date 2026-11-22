@@ -1,15 +1,12 @@
 import React, { useState } from 'react'
 import './App.css'
 
-// Vite вшивает VITE_* на этапе сборки.
-// На Render задаём VITE_API_URL=https://telegramcode-api-76rb.onrender.com
 const API_URL = (() => {
   let base = import.meta.env.VITE_API_URL || 'http://localhost:8000'
   base = String(base).trim().replace(/\/$/, '')
   if (!base.startsWith('http://') && !base.startsWith('https://')) {
     base = `https://${base}`
   }
-  // не дублируем /api
   if (base.endsWith('/api')) return base
   return `${base}/api`
 })()
@@ -28,6 +25,12 @@ function App() {
 
   const [activeMenu, setActiveMenu] = useState('chats')
   const [theme, setTheme] = useState('dark')
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  // settings state
+  const [aiEnabled, setAiEnabled] = useState(false)
+  const [stealthOn, setStealthOn] = useState(false)
+  const [chatTheme, setChatTheme] = useState('default')
 
   const handleSendCode = async () => {
     if (phone.trim().length < 8) {
@@ -42,10 +45,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone }),
       })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `HTTP ${res.status}`)
-      }
+      if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
       const data = await res.json()
       if (data.status === 'code_sent' || data.status === 'already_authorized') {
         if (data.status === 'already_authorized') {
@@ -82,10 +82,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `HTTP ${res.status}`)
-      }
+      if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
       const data = await res.json()
 
       if (data.status === 'success') {
@@ -114,6 +111,11 @@ function App() {
     await handleSignIn()
   }
 
+  const openMenuItem = (id) => {
+    setActiveMenu(id)
+    setMenuOpen(false)
+  }
+
   const menuItems = [
     { id: 'settings', label: 'Настройки' },
     { id: 'chats', label: 'Чаты' },
@@ -129,39 +131,118 @@ function App() {
   const renderContent = () => {
     switch (activeMenu) {
       case 'settings':
-        return <div className="panel"><h2>Настройки</h2><p>Общие настройки клиента</p></div>
+        return (
+          <div className="panel">
+            <h2>Настройки</h2>
+            <p>Общие настройки клиента TelegramCode</p>
+            <div className="settings-list">
+              <div className="settings-row" onClick={() => openMenuItem('theme')}>
+                <span>Тема оформления</span>
+                <span className="settings-value">{theme === 'dark' ? 'Тёмная' : 'Светлая'}</span>
+              </div>
+              <div className="settings-row" onClick={() => openMenuItem('ai')}>
+                <span>ИИ автоответ</span>
+                <span className="settings-value">{aiEnabled ? 'Вкл' : 'Выкл'}</span>
+              </div>
+              <div className="settings-row" onClick={() => openMenuItem('stealth')}>
+                <span>Скрытность</span>
+                <span className="settings-value">{stealthOn ? 'Вкл' : 'Выкл'}</span>
+              </div>
+              <div className="settings-row" onClick={() => openMenuItem('commands')}>
+                <span>Команды</span>
+                <span className="settings-value">→</span>
+              </div>
+              <div className="settings-row" onClick={() => openMenuItem('tg-settings')}>
+                <span>Настройки Telegram</span>
+                <span className="settings-value">→</span>
+              </div>
+              <div className="settings-row" onClick={() => openMenuItem('account')}>
+                <span>Аккаунт</span>
+                <span className="settings-value">→</span>
+              </div>
+            </div>
+          </div>
+        )
       case 'chats':
         return (
           <div className="panel">
             <h2>Чаты</h2>
             {user && (
-              <p>Вы вошли как: <b>{user.first_name} {user.last_name || ''}</b> {user.username ? `(@${user.username})` : ''}</p>
+              <p>
+                Вы вошли как:{' '}
+                <b>
+                  {user.first_name} {user.last_name || ''}
+                </b>{' '}
+                {user.username ? `(@${user.username})` : ''}
+              </p>
             )}
-            <p>Здесь будет список чатов</p>
+            <p className="hint">Тема чатов:</p>
+            <div className="theme-buttons">
+              <button
+                className={chatTheme === 'default' ? 'active' : ''}
+                onClick={() => setChatTheme('default')}
+              >
+                Обычная
+              </button>
+              <button
+                className={chatTheme === 'compact' ? 'active' : ''}
+                onClick={() => setChatTheme('compact')}
+              >
+                Компактная
+              </button>
+            </div>
+            <p style={{ marginTop: 24 }}>Здесь будет список чатов</p>
           </div>
         )
       case 'commands':
-        return <div className="panel"><h2>Команды</h2><p>Управление командами и настройка ИИ</p></div>
+        return (
+          <div className="panel">
+            <h2>Команды</h2>
+            <p>Кнопка | / | около поля ввода откроет строку команд.</p>
+            <p className="hint">Примеры:</p>
+            <ul className="cmd-list">
+              <li><code>spam слово 10</code> — повторить сообщение</li>
+              <li><code>mute</code> — удалять сообщения пользователя</li>
+              <li><code>unmute</code> — снять mute</li>
+            </ul>
+            <p className="hint">Настройка ИИ и свои команды — в соответствующих разделах меню.</p>
+          </div>
+        )
       case 'ai':
         return (
           <div className="panel">
             <h2>ИИ автоответ</h2>
             <label className="toggle">
-              <input type="checkbox" />
-              <span>Включить автоответ</span>
+              <input
+                type="checkbox"
+                checked={aiEnabled}
+                onChange={(e) => setAiEnabled(e.target.checked)}
+              />
+              <span>{aiEnabled ? 'Включено' : 'Выключено'}</span>
             </label>
+            <p className="hint" style={{ marginTop: 16 }}>
+              Позже здесь: свой API, ключ, модель и список бесплатных ИИ без ключа.
+            </p>
           </div>
         )
       case 'tg-settings':
-        return <div className="panel"><h2>Настройки Telegram</h2><p>Настройки самого Telegram</p></div>
+        return (
+          <div className="panel">
+            <h2>Настройки Telegram</h2>
+            <p>Настройки самого Telegram (уведомления, приватность и т.д.)</p>
+            <p className="hint">Раздел в разработке — появятся после подключения списка чатов.</p>
+          </div>
+        )
       case 'account':
         return (
           <div className="panel">
             <h2>Аккаунт</h2>
             {user && (
-              <div>
+              <div className="account-card">
                 <p>ID: {user.id}</p>
-                <p>Имя: {user.first_name} {user.last_name || ''}</p>
+                <p>
+                  Имя: {user.first_name} {user.last_name || ''}
+                </p>
                 <p>Username: {user.username ? `@${user.username}` : 'нет'}</p>
                 <p>Телефон: {user.phone}</p>
               </div>
@@ -177,6 +258,7 @@ function App() {
                 setFirstName('')
                 setLastName('')
                 setIsRegister(false)
+                setMenuOpen(false)
               }}
             >
               Выйти
@@ -194,6 +276,7 @@ function App() {
               <option value="lua">Lua</option>
             </select>
             <textarea placeholder="// Ваш код здесь..." rows={12}></textarea>
+            <button type="button">Сохранить команду</button>
           </div>
         )
       case 'stealth':
@@ -201,9 +284,16 @@ function App() {
           <div className="panel">
             <h2>Скрытность</h2>
             <label className="toggle">
-              <input type="checkbox" />
+              <input
+                type="checkbox"
+                checked={stealthOn}
+                onChange={(e) => setStealthOn(e.target.checked)}
+              />
               <span>Скрывать онлайн-статус</span>
             </label>
+            <p className="hint" style={{ marginTop: 12 }}>
+              Когда включено — исчезаете из онлайна (в разработке на стороне Telethon).
+            </p>
           </div>
         )
       case 'theme':
@@ -211,13 +301,27 @@ function App() {
           <div className="panel">
             <h2>Тема оформления</h2>
             <div className="theme-buttons">
-              <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')}>Тёмная</button>
-              <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')}>Светлая</button>
+              <button
+                className={theme === 'dark' ? 'active' : ''}
+                onClick={() => setTheme('dark')}
+              >
+                Тёмная
+              </button>
+              <button
+                className={theme === 'light' ? 'active' : ''}
+                onClick={() => setTheme('light')}
+              >
+                Светлая
+              </button>
             </div>
           </div>
         )
       default:
-        return <div className="panel"><p>Выберите раздел</p></div>
+        return (
+          <div className="panel">
+            <p>Выберите раздел в меню ☰</p>
+          </div>
+        )
     }
   }
 
@@ -231,9 +335,7 @@ function App() {
               Начать
             </button>
           </div>
-          <div className="login-footer">
-            | модифицированный телеграмм /code |
-          </div>
+          <div className="login-footer">| модифицированный телеграмм /code |</div>
         </div>
       </div>
     )
@@ -246,25 +348,28 @@ function App() {
           <div className="login-box">
             <h1>TelegramCode</h1>
             <p>Выберите способ входа</p>
-
-            <button onClick={() => { setIsRegister(false); setScreen('phone'); }}>
+            <button
+              onClick={() => {
+                setIsRegister(false)
+                setScreen('phone')
+              }}
+            >
               Войти по номеру телефона
             </button>
-
             <button className="secondary" onClick={() => setScreen('qr')}>
               Войти по QR-коду
             </button>
-
             <button
               className="register-link"
-              onClick={() => { setIsRegister(true); setScreen('phone'); }}
+              onClick={() => {
+                setIsRegister(true)
+                setScreen('phone')
+              }}
             >
               Я не имею аккаунта (зарегистрироваться)
             </button>
           </div>
-          <div className="login-footer">
-            | модифицированный телеграмм /code |
-          </div>
+          <div className="login-footer">| модифицированный телеграмм /code |</div>
         </div>
       </div>
     )
@@ -314,7 +419,7 @@ function App() {
               className="login-input"
             />
             <button onClick={handleSignIn} disabled={loading}>
-              {loading ? 'Проверка...' : (isRegister ? 'Далее' : 'Войти')}
+              {loading ? 'Проверка...' : isRegister ? 'Далее' : 'Войти'}
             </button>
             <button className="secondary" onClick={() => setScreen('phone')}>
               Назад
@@ -401,26 +506,59 @@ function App() {
     )
   }
 
+  // ===== MAIN APP =====
   return (
     <div className={`app theme-${theme}`}>
       <div className="main-layout">
-        <aside className="sidebar">
-          <div className="sidebar-header">☰ TelegramCode</div>
+        {/* Верхняя панель с ☰ */}
+        <header className="topbar">
+          <button
+            type="button"
+            className="hamburger"
+            aria-label="Меню"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            ☰
+          </button>
+          <span className="topbar-title">TelegramCode</span>
+          {user && (
+            <span className="topbar-user">
+              {user.first_name}
+            </span>
+          )}
+        </header>
+
+        {/* Затемнение при открытом меню */}
+        {menuOpen && (
+          <div className="menu-overlay" onClick={() => setMenuOpen(false)} />
+        )}
+
+        {/* Выезжающее меню */}
+        <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
+          <div className="sidebar-header">
+            <span>Меню</span>
+            <button
+              type="button"
+              className="sidebar-close"
+              onClick={() => setMenuOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
           <nav className="sidebar-menu">
             {menuItems.map((item) => (
               <div
                 key={item.id}
                 className={`menu-item ${activeMenu === item.id ? 'active' : ''}`}
-                onClick={() => setActiveMenu(item.id)}
+                onClick={() => openMenuItem(item.id)}
               >
                 {item.label}
               </div>
             ))}
           </nav>
         </aside>
-        <main className="content-area">
-          {renderContent()}
-        </main>
+
+        <main className="content-area">{renderContent()}</main>
       </div>
     </div>
   )
