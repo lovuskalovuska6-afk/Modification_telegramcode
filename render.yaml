@@ -1,5 +1,4 @@
 services:
-  # Backend — FastAPI
   - type: web
     name: telegramcode-api
     runtime: python
@@ -13,12 +12,15 @@ services:
         value: "3.11.0"
       - key: HOST
         value: "0.0.0.0"
+      # Реальный вход: поставь свои значения с https://my.telegram.org/apps
       - key: API_ID
-        value: "0"
+        sync: false
       - key: API_HASH
-        value: ""
+        sync: false
+      # false = реальный Telegram, true = заглушка
+      - key: MOCK
+        value: "false"
 
-  # Frontend — React (Vite static)
   - type: web
     name: telegramcode-web
     runtime: static

@@ -11,7 +11,6 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# allow_credentials=True нельзя вместе с allow_origins=["*"] — браузер режет запросы
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,12 +29,17 @@ async def root():
         "message": "TelegramCode API",
         "version": "0.1.0",
         "mode": "mock" if MOCK else "real",
+        "has_api_keys": bool(settings.API_ID and settings.API_HASH),
     }
 
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "mock": MOCK}
+    return {
+        "status": "healthy",
+        "mock": MOCK,
+        "has_api_keys": bool(settings.API_ID and settings.API_HASH),
+    }
 
 
 if __name__ == "__main__":
