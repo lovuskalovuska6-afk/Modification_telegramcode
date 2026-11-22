@@ -27,7 +27,4 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        fromService:
-          name: telegramcode-api
-          type: web
-          property: host
+        value: "https://telegramcode-api-76rb.onrender.com"

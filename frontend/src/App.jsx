@@ -1,14 +1,20 @@
 import React, { useState } from 'react'
 import './App.css'
 
+// Vite вшивает VITE_* на этапе сборки.
+// На Render задаём VITE_API_URL=https://telegramcode-api-76rb.onrender.com
 const API_URL = (() => {
-  const base = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-  const normalized = base.startsWith('http') ? base : `https://${base}`
-  return `${normalized.replace(/\/$/, '')}/api`
+  let base = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  base = String(base).trim().replace(/\/$/, '')
+  if (!base.startsWith('http://') && !base.startsWith('https://')) {
+    base = `https://${base}`
+  }
+  // не дублируем /api
+  if (base.endsWith('/api')) return base
+  return `${base}/api`
 })()
 
 function App() {
-  // screen: landing | auth-choice | phone | code | register | 2fa | qr | app
   const [screen, setScreen] = useState('landing')
   const [phone, setPhone] = useState('')
   const [code, setCode] = useState('')
@@ -36,6 +42,10 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone }),
       })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `HTTP ${res.status}`)
+      }
       const data = await res.json()
       if (data.status === 'code_sent' || data.status === 'already_authorized') {
         if (data.status === 'already_authorized') {
@@ -72,6 +82,10 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `HTTP ${res.status}`)
+      }
       const data = await res.json()
 
       if (data.status === 'success') {
