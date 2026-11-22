@@ -1,58 +1,99 @@
 # TelegramCode
 
-Улучшенный клиент Telegram.
+Улучшенный веб-клиент Telegram.
 
-## Сейчас включена ЗАГЛУШКА (demo-режим)
+**Стек:** React (Vite) + FastAPI + Telethon  
+**Деплой:** Render (frontend static + backend Python)
 
-Вход и регистрация работают **без** API_ID / API_HASH.
+## Что есть сейчас
 
-### Как тестировать
+- Экран **TelegramCode** → «Начать»
+- Вход по номеру телефона (реальный Telegram через Telethon)
+- Регистрация нового аккаунта (имя / фамилия, если номера ещё нет)
+- Поддержка 2FA
+- Заготовка входа по QR
+- Выезжающее меню ☰ со всеми разделами:
+  - Настройки
+  - Чаты (тема чатов)
+  - Команды
+  - ИИ автоответ (вкл/выкл)
+  - Настройки Telegram
+  - Изменить аккаунт / выход
+  - Свои команды (редактор JS / Python / Lua)
+  - Скрытность
+  - Тема оформления (тёмная / светлая)
 
-1. Запусти backend и frontend
-2. Нажми «Начать»
-3. Выбери «Я не имею аккаунта» или «Войти по номеру»
-4. Введи любой номер (например `+79991234567`)
-5. Код: **`12345`** (или любой)
-6. Если регистрация — укажи имя
-7. Попадёшь внутрь клиента
+## Режимы backend
 
-### Запуск
+Управляется переменными окружения на сервере:
+
+| Переменная | Значение |
+|------------|----------|
+| `API_ID` | api_id приложения Telegram |
+| `API_HASH` | api_hash приложения |
+| `MOCK` | `false` = реальный вход, `true` = демо-заглушка |
+
+Если `API_ID` и `API_HASH` заданы и `MOCK=false` — работает **реальный** вход в Telegram.  
+Ключи брать на https://my.telegram.org/apps (только на сервере, не в git).
+
+Проверка: `GET /health` → `"mock": false`, `"has_api_keys": true`.
+
+## Локальный запуск
+
+### Backend
 
 ```bash
-# Backend
 cd backend
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
 
-# Frontend (в другом терминале)
+# .env
+# API_ID=...
+# API_HASH=...
+# MOCK=false
+
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Frontend
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Открой http://localhost:5173
+Открой http://localhost:5173  
 
-### Переключение на реальный Telegram
+Для продакшена задай `VITE_API_URL` (URL backend без хвоста `/api`).
 
-В файле `backend/app/client/telethon_manager.py`:
+## API авторизации
 
-```python
-MOCK = False
+- `POST /api/auth/send-code` — `{ "phone": "+7..." }`
+- `POST /api/auth/sign-in` — код, опционально password / first_name / last_name
+- `POST /api/auth/logout`
+- `POST /api/auth/me`
+- `GET /health` — статус и режим
+
+## Структура
+
+```
+backend/app/
+  api/auth.py
+  client/telethon_manager.py
+  config.py
+  main.py
+frontend/src/
+  App.jsx
+  App.css
+render.yaml
 ```
 
-И добавь в `backend/.env`:
+## В разработке
 
-```
-API_ID=твой_id
-API_HASH=твой_hash
-```
-
-Ключи берутся на https://my.telegram.org/apps (только для сервера, пользователи их не видят).
-
-## Возможности
-
-- Экран TelegramCode → Начать
-- Вход по номеру / QR
-- Регистрация нового аккаунта
-- Левое меню
-- ИИ автоответ, команды, скрытность, темы
+- Список чатов и сообщения
+- Командная строка `| / |` (spam, mute, unmute)
+- ИИ (свой API + бесплатные пресеты)
+- Реальный stealth / QR login
+- Постоянные сессии на диске Render
