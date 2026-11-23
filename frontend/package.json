@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/assemble-app.mjs",
+    "prebuild": "node scripts/assemble-app.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
