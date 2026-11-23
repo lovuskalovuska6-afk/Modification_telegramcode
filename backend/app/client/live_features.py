@@ -167,6 +167,28 @@ async def handle_incoming(manager, phone: str, event) -> None:
             set_last_error(manager, phone, f"Не удалось отправить ответ: {e}")
 
 
+# Устаревшие модели → актуальная замена (Groq 2026)
+DEPRECATED_MODELS = {
+    "llama-3.3-70b-versatile": "openai/gpt-oss-20b",
+    "llama3-70b-8192": "openai/gpt-oss-20b",
+    "llama-3.1-70b-versatile": "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "gemma2-9b-it": "openai/gpt-oss-20b",
+    "mixtral-8x7b-32768": "openai/gpt-oss-20b",
+    "llama3-8b-8192": "openai/gpt-oss-20b",
+}
+
+
+def normalize_model(provider: str, model: str) -> str:
+    m = (model or "").strip()
+    if not m:
+        preset = AI_PRESETS.get(provider, AI_PRESETS["groq"])
+        return preset["model"]
+    if m in DEPRECATED_MODELS:
+        return DEPRECATED_MODELS[m]
+    return m
+
+
 async def ai_generate(manager, phone: str, user_text: str) -> Tuple[Optional[str], Optional[str]]:
     """Возвращает (текст_ответа, ошибка). Ошибка — человекочитаемая строка для UI."""
     ai = getattr(manager, "ai_settings", {}).get(phone) or {}
@@ -179,7 +201,19 @@ async def ai_generate(manager, phone: str, user_text: str) -> Tuple[Optional[str
     api_base = (ai.get("api_base") or "").strip().rstrip("/")
     preset = AI_PRESETS.get(provider, AI_PRESETS["openai"])
     base = api_base or preset["base"]
-    model = model or preset["model"]
+    old_model = model
+    model = normalize_model(provider, model or preset["model"])
+    # авто-миграция устаревшей модели в настройках
+    if old_model != model and old_model in DEPRECATED_MODELS:
+        try:
+            cfg = dict(ai)
+            cfg["model"] = model
+            manager.ai_settings[phone] = cfg
+            sd = getattr(manager, "sessions_dir", None)
+            if sd:
+                save_ai_to_disk(sd, manager.ai_settings)
+        except Exception:
+            pass
 
     try:
         import httpx
@@ -218,6 +252,12 @@ async def ai_generate(manager, phone: str, user_text: str) -> Tuple[Optional[str
                     "429: Лимит запросов. Подожди 1–2 мин или смени модель. "
                     "Groq: console.groq.com — смотри rate limits. "
                     "OpenRouter: используй модели с суффиксом :free."
+                )
+            if r.status_code == 404:
+                return None, (
+                    f"404: модель «{model}» недоступна на {provider}. "
+                    "В разделе ИИ выбери бесплатную модель из списка "
+                    "(например openai/gpt-oss-20b для Groq) и нажми Сохранить."
                 )
             if r.status_code >= 400:
                 hint = ""
