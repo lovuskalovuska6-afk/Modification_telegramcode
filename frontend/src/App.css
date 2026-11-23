@@ -283,3 +283,16 @@
   font-size: 13px;
   line-height: 1.45;
 }
+
+/* Local system chat (website only) */
+.dialog-item.local-system {
+  border-bottom: 1px solid rgba(42, 171, 238, 0.35);
+  background: rgba(42, 171, 238, 0.08);
+}
+.dialog-item.local-system .dialog-title {
+  color: #2aabee;
+  font-weight: 600;
+}
+.dialog-item.local-system.active {
+  background: rgba(42, 171, 238, 0.18);
+}
