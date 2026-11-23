@@ -1,7 +1,6 @@
-"""TelethonManager — assembled from part files."""
+"""TelethonManager — full source via zlib parts."""
 from pathlib import Path
-_dir = Path(__file__).parent
-_parts = []
-for _i in range(7):
-    _parts.append((_dir / f"mgr_part_{_i}.txt").read_text())
-exec("".join(_parts), globals())
+import base64, zlib
+_d = Path(__file__).parent
+_b = (_d / "tm_z0.txt").read_text().strip() + (_d / "tm_z1.txt").read_text().strip()
+exec(zlib.decompress(base64.b64decode(_b)).decode("utf-8"), globals())
