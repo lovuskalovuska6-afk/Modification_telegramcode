@@ -479,3 +479,39 @@
   cursor: zoom-in;
   display: block;
 }
+
+/* Chat messages loading */
+.msgs-loading-bar {
+  height: 3px;
+  width: 100%;
+  background: rgba(42, 171, 238, 0.15);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.msgs-loading-bar-inner {
+  height: 100%;
+  width: 40%;
+  background: #2aabee;
+  animation: msgs-slide 1s ease-in-out infinite;
+}
+@keyframes msgs-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+.media-loading {
+  opacity: 0.9;
+}
+.media-progress {
+  margin-top: 6px;
+  height: 3px;
+  width: 100%;
+  background: rgba(255,255,255,0.12);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.media-progress-inner {
+  height: 100%;
+  width: 40%;
+  background: #2aabee;
+  animation: msgs-slide 1s ease-in-out infinite;
+}
