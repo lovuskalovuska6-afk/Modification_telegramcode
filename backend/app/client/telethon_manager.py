@@ -568,6 +568,85 @@ class TelethonManager:
             pass
         return info
 
+    MEDIA_DOWNLOAD_MAX = 12 * 1024 * 1024  # 12 MB — лимит free-хостинга
+
+    @on_tg_loop
+    async def download_message_media(self, phone: str, chat_id: int, message_id: int) -> dict:
+        """Скачать медиа сообщения (base64). Фото/аудио/видео/файл в пределах лимита."""
+        import base64
+        if MOCK:
+            return {"status": "error", "message": "В mock-режиме медиа недоступно"}
+        try:
+            client = await self._ensure_client(phone)
+            if not await client.is_user_authorized():
+                return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
+            msgs = await client.get_messages(chat_id, ids=int(message_id))
+            m = msgs if not isinstance(msgs, list) else (msgs[0] if msgs else None)
+            if not m:
+                return {"status": "error", "message": "Сообщение не найдено"}
+            if not getattr(m, "media", None):
+                return {"status": "error", "message": "В сообщении нет медиа"}
+
+            size_hint = None
+            mime = "application/octet-stream"
+            name = f"file_{message_id}"
+            media_type = "file"
+            try:
+                desc = await self._describe_media(client, m)
+                media_type = desc.get("type") or "file"
+                mime = desc.get("mime") or mime
+                if desc.get("name"):
+                    name = desc["name"]
+                size_hint = desc.get("size")
+                if media_type == "photo":
+                    mime = "image/jpeg"
+                    if not str(name).lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        name = f"photo_{message_id}.jpg"
+                elif media_type == "voice":
+                    mime = mime if "audio" in (mime or "") else "audio/ogg"
+                    if "." not in str(name):
+                        name = f"voice_{message_id}.ogg"
+                elif media_type == "audio":
+                    mime = mime or "audio/mpeg"
+                    if "." not in str(name):
+                        name = f"audio_{message_id}.mp3"
+                elif media_type == "video":
+                    mime = mime or "video/mp4"
+                    if "." not in str(name):
+                        name = f"video_{message_id}.mp4"
+            except Exception:
+                pass
+
+            if size_hint and int(size_hint) > self.MEDIA_DOWNLOAD_MAX:
+                mb = int(size_hint) // (1024 * 1024)
+                return {
+                    "status": "error",
+                    "message": f"Файл слишком большой ({mb} MB). Лимит {self.MEDIA_DOWNLOAD_MAX // (1024 * 1024)} MB.",
+                    "too_large": True,
+                    "size": int(size_hint),
+                }
+
+            data = await client.download_media(m, file=bytes)
+            if not data:
+                return {"status": "error", "message": "Не удалось скачать медиа"}
+            if len(data) > self.MEDIA_DOWNLOAD_MAX:
+                return {
+                    "status": "error",
+                    "message": f"Файл слишком большой ({len(data) // (1024 * 1024)} MB). Лимит {self.MEDIA_DOWNLOAD_MAX // (1024 * 1024)} MB.",
+                    "too_large": True,
+                    "size": len(data),
+                }
+            return {
+                "status": "success",
+                "type": media_type,
+                "mime": mime,
+                "name": name,
+                "size": len(data),
+                "data_base64": base64.b64encode(data).decode("ascii"),
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     @on_tg_loop
     async def send_message(self, phone: str, chat_id: int, text: str) -> dict:
         if MOCK:
