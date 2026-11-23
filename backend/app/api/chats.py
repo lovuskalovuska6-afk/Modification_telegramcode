@@ -30,6 +30,12 @@ class CommandBody(BaseModel):
     args: Optional[List[str]] = None
 
 
+class MediaBody(BaseModel):
+    phone: str
+    chat_id: int
+    message_id: int
+
+
 @router.post("/dialogs")
 async def dialogs(data: PhoneBody):
     try:
@@ -68,6 +74,19 @@ async def command(data: CommandBody):
             data.chat_id,
             data.command.strip().lower(),
             data.args or [],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/media")
+async def media(data: MediaBody):
+    """Скачать медиа сообщения (base64). Лимит ~12 MB."""
+    try:
+        return await telethon_manager.download_message_media(
+            data.phone.strip(),
+            int(data.chat_id),
+            int(data.message_id),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
