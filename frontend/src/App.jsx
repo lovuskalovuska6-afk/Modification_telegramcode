@@ -380,15 +380,25 @@ function App() {
     a.click()
   }
 
+  // защита от гонки: ответ старого чата не должен перетирать новый
+  const messagesReqId = useRef(0)
+
   const loadMessages = async (chatId, p = phone) => {
     if (!p || !chatId || isLocalChat(chatId)) return
+    const reqId = ++messagesReqId.current
+    const targetId = chatId
     try {
       const res = await fetch(`${API_URL}/chats/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: p, chat_id: chatId, limit: 50 }),
       })
+      // пользователь уже ушёл в другой чат — отбрасываем ответ
+      if (reqId !== messagesReqId.current) return
+      if (activeChatRef.current && activeChatRef.current.id !== targetId) return
       const data = await res.json()
+      if (reqId !== messagesReqId.current) return
+      if (activeChatRef.current && activeChatRef.current.id !== targetId) return
       if (data.status === 'success') {
         const next = data.messages || []
         setMessages((prev) => (msgsEqual(prev, next) ? prev : next))
@@ -397,12 +407,22 @@ function App() {
   }
 
   const openChat = (d) => {
+    // сразу фиксируем активный чат в ref (не ждём useEffect)
+    activeChatRef.current = d
     setActiveChat(d)
     setActiveMenu('chats')
     setMenuOpen(false)
-    if (isSystemChat(d.id)) setMessages(systemMessages)
-    else if (isLocalAiChat(d.id)) setMessages(localAiMessages)
-    else loadMessages(d.id)
+    // инвалидируем предыдущие запросы сообщений
+    messagesReqId.current += 1
+    if (isSystemChat(d.id)) {
+      setMessages(systemMessages)
+    } else if (isLocalAiChat(d.id)) {
+      setMessages(localAiMessages)
+    } else {
+      // мгновенно очищаем ленту, чтобы не мигали сообщения прошлого чата
+      setMessages([])
+      loadMessages(d.id)
+    }
   }
 
   const pushSystemMsg = (text, isError = false) => {
