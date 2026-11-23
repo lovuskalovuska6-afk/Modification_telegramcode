@@ -61,6 +61,8 @@ function App() {
   })
   const [stealthOn, setStealthOn] = useState(false)
   const [dialogs, setDialogs] = useState([])
+  const [archivedDialogs, setArchivedDialogs] = useState([])
+  const [archiveOpen, setArchiveOpen] = useState(false)
   const [activeChat, setActiveChat] = useState(null)
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
@@ -279,7 +281,14 @@ function App() {
       })
       const data = await res.json()
       if (data.status === 'success') {
-        setDialogs((prev) => (dialogsEqual(prev, data.dialogs || []) ? prev : (data.dialogs || [])))
+        // основной список без архива
+        const main = (data.dialogs || []).filter((d) => !d.archived)
+        setDialogs((prev) => (dialogsEqual(prev, main) ? prev : main))
+        if (Array.isArray(data.archived)) {
+          setArchivedDialogs(data.archived)
+        } else {
+          setArchivedDialogs([])
+        }
         if (Array.isArray(data.muted_ids)) {
           const s = new Set(data.muted_ids.map(Number))
           setMutedIds(s)
@@ -861,7 +870,38 @@ function App() {
               </div>
             </div>
           ))}
-          {!chatsLoading && dialogs.length === 0 && (
+          {archivedDialogs.length > 0 && (
+            <div className="archive-section">
+              <div
+                className="archive-header"
+                onClick={() => setArchiveOpen((v) => !v)}
+                title="Чаты из архива Telegram"
+              >
+                <span>📦 Архив ({archivedDialogs.length})</span>
+                <span className="archive-chevron">{archiveOpen ? '▾' : '▸'}</span>
+              </div>
+              {archiveOpen && archivedDialogs.map((d) => (
+                <div
+                  key={`arch_${d.id}`}
+                  className={`dialog-item archived ${activeChat?.id === d.id ? 'active' : ''}`}
+                  onClick={() => openChat(d)}
+                >
+                  <div className="dialog-avatar">{(d.title || '?')[0]}</div>
+                  <div className="dialog-body">
+                    <div className="dialog-top">
+                      <span className="dialog-title">
+                        {d.title}
+                        {(mutedIds.has(Number(d.id)) || d.muted) ? ' 🔇' : ''}
+                      </span>
+                      {d.unread > 0 && <span className="badge">{d.unread}</span>}
+                    </div>
+                    <div className="dialog-last">{d.last_message || ''}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {!chatsLoading && dialogs.length === 0 && archivedDialogs.length === 0 && (
             <div className="hint pad">Нет чатов Telegram. Локальный чат ⚡ всегда сверху.</div>
           )}
         </div>
