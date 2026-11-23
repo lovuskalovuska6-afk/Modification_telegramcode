@@ -163,13 +163,56 @@ body {
   padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 600;
   display: flex; align-items: center; gap: 8px;
 }
-.messages-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.messages-list {
+  flex: 1; overflow-y: auto; padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+/* Свои справа, собеседник слева */
+.bubble {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.35;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.bubble.in {
+  align-self: flex-start;
+  background: var(--msg-in);
+  color: var(--text);
+  border-bottom-left-radius: 4px;
+}
+.bubble.out {
+  align-self: flex-end;
+  background: var(--msg-out);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.bubble-sender {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.bubble-text { white-space: pre-wrap; }
+.bubble-meta {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 4px;
+  text-align: right;
+}
+.bubble.in .bubble-meta { text-align: left; }
+
+/* совместимость со старыми классами */
 .msg {
   max-width: 80%; padding: 8px 12px; border-radius: 12px; font-size: 14px;
 }
 .msg.in { align-self: flex-start; background: var(--msg-in); }
 .msg.out { align-self: flex-end; background: var(--msg-out); color: #fff; }
 .msg-meta { font-size: 11px; opacity: .7; margin-top: 4px; }
+
 .composer {
   display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); align-items: center;
 }
@@ -240,4 +283,5 @@ body {
   .dialogs-pane { width: 100%; max-width: 100%; border-right: none; }
   .mobile-only { display: inline-flex; }
   .topbar-user { max-width: 80px; }
+  .bubble { max-width: 88%; }
 }
