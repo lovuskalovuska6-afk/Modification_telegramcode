@@ -66,10 +66,34 @@ function App() {
   const [text, setText] = useState('')
   const [cmdMode, setCmdMode] = useState(false)
   const [chatsLoading, setChatsLoading] = useState(false)
+  // Локальный чат только на сайте (не в Telegram)
+  const SYSTEM_CHAT_ID = 'local_system'
+  const SYSTEM_CHAT = {
+    id: SYSTEM_CHAT_ID,
+    title: '⚡ TelegramCode',
+    last_message: 'Команды и ошибки ИИ',
+    unread: 0,
+    local: true,
+  }
+  const [systemMessages, setSystemMessages] = useState(() => {
+    try {
+      const raw = localStorage.getItem('tg_system_log')
+      if (raw) return JSON.parse(raw)
+    } catch (e) {}
+    return [{
+      id: 'sys_welcome',
+      text: 'Локальный чат сайта.\nСюда приходят ответы команд (help, status, ai test) и ошибки ИИ.\nВ Telegram этого чата нет.',
+      out: false,
+      sender: '⚡ TelegramCode',
+      date: '',
+      system: true,
+    }]
+  })
   const messagesEndRef = useRef(null)
   const activeChatRef = useRef(null)
   const phoneRef = useRef(phone)
   const screenRef = useRef(screen)
+  const isSystemChat = (id) => id === SYSTEM_CHAT_ID || id === 'local_system'
 
   const AI_PROVIDERS = [
     { id: 'groq', label: 'Groq (бесплатно)', model: 'openai/gpt-oss-20b', url: 'https://console.groq.com/keys' },
@@ -262,8 +286,15 @@ function App() {
     if (!silent) setChatsLoading(false)
   }
 
+  const persistSystemLog = (msgs) => {
+    try {
+      const keep = (msgs || []).slice(-80)
+      localStorage.setItem('tg_system_log', JSON.stringify(keep))
+    } catch (e) {}
+  }
+
   const loadMessages = async (chatId, p = phone) => {
-    if (!p || !chatId) return
+    if (!p || !chatId || isSystemChat(chatId)) return
     try {
       const res = await fetch(`${API_URL}/chats/messages`, {
         method: 'POST',
@@ -282,68 +313,101 @@ function App() {
     setActiveChat(d)
     setActiveMenu('chats')
     setMenuOpen(false)
-    loadMessages(d.id)
+    if (isSystemChat(d.id)) {
+      setMessages(systemMessages)
+    } else {
+      loadMessages(d.id)
+    }
   }
 
   const pushSystemMsg = (text, isError = false) => {
     const id = `sys_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    setMessages((prev) => [
-      ...prev,
-      {
-        id,
-        text: text || '',
-        out: false,
-        sender: isError ? '⚠ Ошибка' : '⚡ TelegramCode',
-        date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        system: true,
-        error: !!isError,
-      },
-    ])
+    const msg = {
+      id,
+      text: text || '',
+      out: false,
+      sender: isError ? '⚠ Ошибка' : '⚡ TelegramCode',
+      date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      system: true,
+      error: !!isError,
+    }
+    setSystemMessages((prev) => {
+      const next = [...prev, msg].slice(-80)
+      persistSystemLog(next)
+      return next
+    })
+    // если сейчас открыт локальный чат — сразу показать
+    if (activeChatRef.current && isSystemChat(activeChatRef.current.id)) {
+      setMessages((prev) => [...prev, msg])
+    }
+  }
+
+  const openSystemChat = () => {
+    setActiveChat(SYSTEM_CHAT)
+    setActiveMenu('chats')
+    setMenuOpen(false)
+    setMessages(systemMessages)
   }
 
   const sendText = async () => {
     if (!text.trim() || !activeChat || !phone) return
     const payload = text.trim()
     setText('')
-    if (cmdMode || payload.startsWith('/')) {
+    const inSystem = isSystemChat(activeChat.id)
+
+    // В локальном чате — только команды
+    if (inSystem && !(cmdMode || payload.startsWith('/') || true)) {
+      // always treat as command in system chat if not empty
+    }
+
+    if (cmdMode || payload.startsWith('/') || inSystem) {
       const raw = payload.startsWith('/') ? payload.slice(1) : payload
       const parts = raw.split(/\s+/).filter(Boolean)
       const command = parts[0] || ''
       const args = parts.slice(1)
+      if (!command) return
       setCmdMode(false)
+      // chat_id для mute/spam: если локальный чат — шлём 0 (сервер не применит mute к локальному)
+      const chatIdForCmd = inSystem ? 0 : activeChat.id
       try {
         const res = await fetch(`${API_URL}/chats/command`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, chat_id: activeChat.id, command, args }),
+          body: JSON.stringify({ phone, chat_id: chatIdForCmd, command, args }),
         })
         const data = await res.json()
         if (data.status === 'success') {
-          // Показываем ответ команды на экране (help/status/ping/ai test и т.д.)
           if (data.message && typeof data.message === 'string') {
             pushSystemMsg(data.message, false)
+          } else {
+            pushSystemMsg(`Команда «${command}» выполнена`, false)
           }
-          // spam/reply и т.п. — ещё и реальные сообщения
-          if (data.sent || command === 'spam' || command === 'reply' || command === 'clear') {
+          // spam/reply только в реальном чате
+          if (!inSystem && (data.sent || command === 'spam' || command === 'reply' || command === 'clear')) {
             await loadMessages(activeChat.id)
           }
           await loadDialogs(phone, false, true)
-          // если ai test вернул ошибку в message — уже показали; обновим last_error
-          if (command === 'ai' && args[0] === 'test') {
-            loadAiSettings(phone)
-          }
+          if (command === 'ai') loadAiSettings(phone)
+          // всегда открываем локальный чат, чтобы пользователь увидел ответ
+          if (!inSystem) openSystemChat()
+          else setMessages((prev) => {
+            // already pushed via pushSystemMsg when in system
+            return prev
+          })
         } else {
           const errText = data.message || data.detail || 'Ошибка команды'
           pushSystemMsg(errText, true)
-          setError(errText)
           if (command === 'ai') loadAiSettings(phone)
+          if (!inSystem) openSystemChat()
         }
       } catch (e) {
-        pushSystemMsg('Ошибка сети при выполнении команды', true)
-        setError('Ошибка команды')
+        pushSystemMsg('Ошибка сети при выполнении команды: ' + String(e.message || e), true)
+        if (!inSystem) openSystemChat()
       }
       return
     }
+
+    // обычная отправка только в реальные чаты
     try {
       const res = await fetch(`${API_URL}/chats/send`, {
         method: 'POST',
@@ -379,19 +443,28 @@ function App() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, systemMessages])
 
   useEffect(() => {
     if (screen === 'app' && phone) loadDialogs(phone)
   }, [screen, phone])
 
+  // когда открыт локальный чат — синхронизируем ленту с systemMessages
+  useEffect(() => {
+    if (activeChat && isSystemChat(activeChat.id)) {
+      setMessages(systemMessages)
+    }
+  }, [systemMessages, activeChat?.id])
+
   useEffect(() => {
     if (screen !== 'app' || !phone || !activeChat) return
+    if (isSystemChat(activeChat.id)) return // локальный чат не поллим
     const chatId = activeChat.id
     const tick = () => {
       if (screenRef.current !== 'app') return
       if (!phoneRef.current) return
       if (!activeChatRef.current || activeChatRef.current.id !== chatId) return
+      if (isSystemChat(activeChatRef.current.id)) return
       loadMessages(chatId, phoneRef.current)
     }
     const id = setInterval(tick, 2500)
@@ -527,6 +600,22 @@ function App() {
         </div>
         {chatsLoading && <div className="hint pad">Загрузка…</div>}
         <div className="dialogs-list">
+          {/* Локальный чат только на сайте */}
+          <div
+            key={SYSTEM_CHAT_ID}
+            className={`dialog-item local-system ${activeChat?.id === SYSTEM_CHAT_ID ? 'active' : ''}`}
+            onClick={() => openSystemChat()}
+          >
+            <div className="dialog-avatar">⚡</div>
+            <div className="dialog-body">
+              <div className="dialog-top">
+                <span className="dialog-title">⚡ TelegramCode</span>
+              </div>
+              <div className="dialog-last">
+                {(systemMessages[systemMessages.length - 1]?.text || 'Команды и ошибки ИИ').slice(0, 60)}
+              </div>
+            </div>
+          </div>
           {dialogs.map((d) => (
             <div key={d.id} className={`dialog-item ${activeChat?.id === d.id ? 'active' : ''}`} onClick={() => openChat(d)}>
               <div className="dialog-avatar">{(d.title || '?')[0]}</div>
@@ -540,7 +629,7 @@ function App() {
             </div>
           ))}
           {!chatsLoading && dialogs.length === 0 && (
-            <div className="hint pad">Нет чатов. Обновите или проверьте сессию.</div>
+            <div className="hint pad">Нет чатов Telegram. Локальный чат ⚡ всегда сверху.</div>
           )}
         </div>
       </div>
@@ -550,7 +639,11 @@ function App() {
             <div className="chat-header">
               <button type="button" className="icon-btn mobile-only" onClick={() => setActiveChat(null)}>←</button>
               <span className="chat-title">{activeChat.title}</span>
-              <span className="live-dot" title="Автообновление">●</span>
+              {isSystemChat(activeChat.id) ? (
+                <span className="hint" style={{ fontSize: 11, marginLeft: 8 }}>только на сайте</span>
+              ) : (
+                <span className="live-dot" title="Автообновление">●</span>
+              )}
             </div>
             <div className="messages-list">
               {messages.map((m) => (
@@ -566,8 +659,18 @@ function App() {
               <div ref={messagesEndRef} />
             </div>
             <div className="composer">
-              <button type="button" className={`cmd-toggle ${cmdMode ? 'on' : ''}`} title="Команды" onClick={() => setCmdMode((v) => !v)}>| / |</button>
-              <input className="composer-input" placeholder={cmdMode ? 'help | status | ai test | mute' : 'Сообщение...'} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendText()} />
+              <button type="button" className={`cmd-toggle ${cmdMode || isSystemChat(activeChat.id) ? 'on' : ''}`} title="Команды" onClick={() => setCmdMode((v) => !v)}>| / |</button>
+              <input
+                className="composer-input"
+                placeholder={
+                  isSystemChat(activeChat.id)
+                    ? 'help | status | ai test | ai on'
+                    : (cmdMode ? 'help | status | ai test | mute' : 'Сообщение...')
+                }
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && sendText()}
+              />
               <button type="button" className="send-btn" onClick={sendText}>➤</button>
             </div>
           </>
