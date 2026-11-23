@@ -500,8 +500,7 @@ class TelethonManager:
             return {"status": "error", "message": str(e)}
 
     async def _describe_media(self, client, m) -> dict:
-        """Тип медиа + превью фото (base64) если небольшое."""
-        import base64
+        """Только метаданные медиа (без скачивания файла). Превью — через /chats/media по запросу."""
         from telethon.tl.types import (
             MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage,
         )
@@ -511,13 +510,8 @@ class TelethonManager:
             if isinstance(media, MessageMediaPhoto) or (getattr(m, "photo", None)):
                 info["type"] = "photo"
                 info["label"] = "📷 Фото"
-                try:
-                    data = await client.download_media(m, file=bytes)
-                    if data and len(data) < 350_000:
-                        info["thumb"] = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
-                        info["size"] = len(data)
-                except Exception:
-                    pass
+                info["mime"] = "image/jpeg"
+                # не качаем здесь — иначе список сообщений тормозит на каждой фотке
                 return info
             if isinstance(media, MessageMediaDocument) or getattr(m, "document", None):
                 doc = getattr(m, "document", None) or getattr(media, "document", None)
@@ -528,11 +522,12 @@ class TelethonManager:
                     n = getattr(attr, "file_name", None)
                     if n:
                         name = n
-                    if getattr(attr, "duration", None) is not None and hasattr(attr, "voice"):
-                        duration = attr.duration
+                    # DocumentAttributeAudio: voice=True для голосовых
+                    if getattr(attr, "voice", False):
+                        duration = getattr(attr, "duration", None)
                         info["type"] = "voice"
                         info["label"] = "🎤 Голосовое"
-                    elif getattr(attr, "duration", None) is not None and "audio" in mime:
+                    elif getattr(attr, "duration", None) is not None and "audio" in mime and info["type"] == "unknown":
                         duration = attr.duration
                         info["type"] = "audio"
                         info["label"] = "🎵 Аудио"
