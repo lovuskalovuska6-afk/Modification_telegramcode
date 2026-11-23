@@ -421,8 +421,8 @@ class TelethonManager:
                 return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
             muted_ids = {int(x) for x in (self.muted.get(phone) or set())}
             ai_on = bool((self.ai_settings.get(phone) or {}).get("enabled"))
-            dialogs = []
-            async for d in client.iter_dialogs(limit=50):
+
+            def _dialog_row(d, force_archived=False):
                 entity = d.entity
                 title = d.name or "Без имени"
                 username = getattr(entity, "username", None)
@@ -432,7 +432,8 @@ class TelethonManager:
                     if last and len(last) > 80:
                         last = last[:80] + "…"
                 did = int(d.id)
-                dialogs.append({
+                archived = force_archived or bool(getattr(d, "archived", False))
+                return {
                     "id": did,
                     "title": title,
                     "username": username,
@@ -442,10 +443,27 @@ class TelethonManager:
                     "is_channel": d.is_channel,
                     "muted": did in muted_ids,
                     "ai_enabled": ai_on,
-                })
+                    "archived": archived,
+                }
+
+            # folder=0 — основной список; folder=1 — архив (как в Telegram)
+            dialogs = []
+            async for d in client.iter_dialogs(limit=50, folder=0):
+                if getattr(d, "archived", False):
+                    continue
+                dialogs.append(_dialog_row(d, force_archived=False))
+
+            archived = []
+            try:
+                async for d in client.iter_dialogs(limit=50, folder=1):
+                    archived.append(_dialog_row(d, force_archived=True))
+            except Exception:
+                archived = []
+
             return {
                 "status": "success",
                 "dialogs": dialogs,
+                "archived": archived,
                 "ai_enabled": ai_on,
                 "muted_ids": list(muted_ids),
             }
