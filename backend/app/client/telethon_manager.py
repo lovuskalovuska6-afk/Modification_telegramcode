@@ -1,1 +1,1 @@
-@/workspace/artifacts/telethon_manager.py
+PLACEHOLDER_SEE_NEXT
