@@ -112,10 +112,51 @@ def set_last_error(manager, phone: str, err: str) -> None:
     manager.ai_settings[phone] = cfg
 
 
+def _norm_chat_id(cid) -> int:
+    try:
+        return int(cid)
+    except Exception:
+        return cid
+
+
+def _muted_set(manager, phone: str) -> set:
+    s = getattr(manager, "muted", {}).get(phone) or set()
+    return {_norm_chat_id(x) for x in s}
+
+
+def _is_muted(manager, phone: str, chat_id) -> bool:
+    return _norm_chat_id(chat_id) in _muted_set(manager, phone)
+
+
+def save_mute_to_disk(sessions_dir: Path, muted: Dict[str, set]) -> None:
+    path = Path(sessions_dir) / "muted.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        clean = {str(p): [int(x) for x in s] for p, s in (muted or {}).items()}
+        path.write_text(json.dumps(clean, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def load_mute_from_disk(sessions_dir: Path) -> Dict[str, set]:
+    path = Path(sessions_dir) / "muted.json"
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            out = {}
+            for p, ids in (data or {}).items():
+                out[str(p)] = {int(x) for x in ids}
+            return out
+    except Exception:
+        pass
+    return {}
+
+
 async def attach_handlers(manager, phone: str, client) -> None:
-    if not hasattr(manager, "_handlers_ready"):
-        manager._handlers_ready = set()
-    if phone in manager._handlers_ready:
+    """Вешаем хендлер на client. После reconnect клиент новый — флаг на объекте сбросится."""
+    if client is None:
+        return
+    if getattr(client, "_tc_incoming_handler", False):
         return
     from telethon import events
 
@@ -123,45 +164,87 @@ async def attach_handlers(manager, phone: str, client) -> None:
     async def _on_incoming(event, _phone=phone):
         try:
             await handle_incoming(manager, _phone, event)
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                set_last_error(manager, _phone, f"handler: {type(e).__name__}: {e}")
+            except Exception:
+                pass
 
+    client._tc_incoming_handler = True
+    if not hasattr(manager, "_handlers_ready"):
+        manager._handlers_ready = set()
     manager._handlers_ready.add(phone)
 
 
 async def handle_incoming(manager, phone: str, event) -> None:
-    """Mute: удаляет ЛЮБОЕ входящее (текст, фото, видео, голосовые, стикеры, документы).
-    AI: отвечает только на текст в личных сообщениях, если включено.
-    """
-    chat_id = event.chat_id
-    muted = getattr(manager, "muted", {}).get(phone) or set()
-    if chat_id in muted:
+    """Mute: удаляет любое входящее. AI: отвечает на текст в ЛС с историей и стилем аккаунта."""
+    chat_id = _norm_chat_id(event.chat_id)
+
+    # --- MUTE ---
+    if _is_muted(manager, phone, chat_id):
         try:
             await event.delete()
         except Exception:
-            try:
-                await event.client.delete_messages(chat_id, [event.id], revoke=True)
-            except Exception:
-                pass
+            pass
+        try:
+            await event.client.delete_messages(event.chat_id, [event.id], revoke=True)
+        except Exception:
+            pass
         return
 
+    # --- AI (только личка, входящий текст) ---
     ai = getattr(manager, "ai_settings", {}).get(phone) or {}
     if not ai.get("enabled"):
         return
-    if not event.is_private:
+
+    is_private = False
+    try:
+        is_private = bool(event.is_private)
+    except Exception:
+        is_private = False
+    if not is_private and chat_id > 0:
+        # user peer id положительный — считаем личкой
+        is_private = True
+    if not is_private:
         return
-    if event.out:
+    if getattr(event, "out", False):
         return
     text = (event.raw_text or "").strip()
     if not text:
         return
-    reply, err = await ai_generate(manager, phone, text)
+
+    history = []
+    me_info = None
+    try:
+        client = event.client
+        try:
+            me = await client.get_me()
+            me_info = {
+                "first_name": getattr(me, "first_name", "") or "",
+                "last_name": getattr(me, "last_name", "") or "",
+                "username": getattr(me, "username", "") or "",
+                "phone": getattr(me, "phone", "") or "",
+                "id": getattr(me, "id", None),
+            }
+        except Exception:
+            me_info = None
+        msgs = await client.get_messages(event.chat_id, limit=12)
+        for m in reversed(list(msgs)[1:] if msgs else []):
+            t = (m.raw_text or "").strip()
+            if not t:
+                continue
+            role = "assistant" if m.out else "user"
+            history.append({"role": role, "content": t[:500]})
+        history = history[-10:]
+    except Exception:
+        history = []
+
+    reply, err = await ai_generate(manager, phone, text, history=history, me_info=me_info)
     if err:
         set_last_error(manager, phone, err)
     if reply:
         try:
             await event.respond(reply)
-            # успех — очищаем ошибку
             set_last_error(manager, phone, "")
         except Exception as e:
             set_last_error(manager, phone, f"Не удалось отправить ответ: {e}")
@@ -189,8 +272,14 @@ def normalize_model(provider: str, model: str) -> str:
     return m
 
 
-async def ai_generate(manager, phone: str, user_text: str) -> Tuple[Optional[str], Optional[str]]:
-    """Возвращает (текст_ответа, ошибка). Ошибка — человекочитаемая строка для UI."""
+async def ai_generate(
+    manager,
+    phone: str,
+    user_text: str,
+    history: Optional[List[dict]] = None,
+    me_info: Optional[dict] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Возвращает (текст_ответа, ошибка). Учитывает историю и личность аккаунта."""
     ai = getattr(manager, "ai_settings", {}).get(phone) or {}
     api_key = (ai.get("api_key") or "").strip()
     if not api_key:
@@ -203,7 +292,6 @@ async def ai_generate(manager, phone: str, user_text: str) -> Tuple[Optional[str
     base = api_base or preset["base"]
     old_model = model
     model = normalize_model(provider, model or preset["model"])
-    # авто-миграция устаревшей модели в настройках
     if old_model != model and old_model in DEPRECATED_MODELS:
         try:
             cfg = dict(ai)
@@ -214,6 +302,30 @@ async def ai_generate(manager, phone: str, user_text: str) -> Tuple[Optional[str
                 save_ai_to_disk(sd, manager.ai_settings)
         except Exception:
             pass
+
+    # личность аккаунта
+    me = me_info or {}
+    name_parts = [me.get("first_name") or "", me.get("last_name") or ""]
+    display_name = " ".join(p for p in name_parts if p).strip() or "владелец аккаунта"
+    uname = me.get("username") or ""
+    system_content = (
+        f"Ты пишешь от лица человека: {display_name}"
+        + (f" (@{uname})" if uname else "")
+        + ". Это его личный Telegram-аккаунт.\n"
+        "Пиши точь-в-точь как он: коротко, по-человечески, на русском, "
+        "в том же тоне, что и в истории переписки ниже.\n"
+        "Не упоминай, что ты ИИ, бот или автоответчик. "
+        "Не извиняйся за задержку без причины. Не используй канцелярит."
+    )
+
+    messages = [{"role": "system", "content": system_content}]
+    if history:
+        for h in history:
+            role = h.get("role") or "user"
+            content = (h.get("content") or "").strip()
+            if content and role in ("user", "assistant", "system"):
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_text})
 
     try:
         import httpx
@@ -226,18 +338,8 @@ async def ai_generate(manager, phone: str, user_text: str) -> Tuple[Optional[str
             headers["X-Title"] = "TelegramCode"
         payload = {
             "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты помощник владельца аккаунта Telegram. "
-                        "Отвечай кратко и по-русски от его имени, как живой человек. "
-                        "Не пиши, что ты ИИ, если тебя об этом не спросили."
-                    ),
-                },
-                {"role": "user", "content": user_text},
-            ],
-            "temperature": 0.7,
+            "messages": messages,
+            "temperature": 0.75,
             "max_tokens": 500,
         }
         async with httpx.AsyncClient(timeout=45.0) as http:
@@ -297,18 +399,41 @@ async def run_extra_command(manager, phone, chat_id, cmd, args, MOCK, send_messa
         return {"status": "success", "message": text}
 
     if cmd == "mute":
-        manager.muted.setdefault(phone, set()).add(chat_id)
+        cid = _norm_chat_id(chat_id)
+        if not cid:
+            return {"status": "error", "message": "Mute только в реальном чате (открой чат и напиши mute там)"}
+        manager.muted.setdefault(phone, set()).add(cid)
+        try:
+            sd = getattr(manager, "sessions_dir", None)
+            if sd:
+                save_mute_to_disk(sd, manager.muted)
+        except Exception:
+            pass
         return {
             "status": "success",
-            "message": "Mute включён: все входящие (текст, фото, видео, стикеры, документы) в этом чате будут удаляться",
+            "message": f"Mute включён для чата {cid}: все входящие будут удаляться",
+            "muted": True,
+            "chat_id": cid,
         }
 
     if cmd == "unmute":
-        manager.muted.setdefault(phone, set()).discard(chat_id)
-        return {"status": "success", "message": f"Mute выключен для чата {chat_id}"}
+        cid = _norm_chat_id(chat_id)
+        manager.muted.setdefault(phone, set()).discard(cid)
+        try:
+            sd = getattr(manager, "sessions_dir", None)
+            if sd:
+                save_mute_to_disk(sd, manager.muted)
+        except Exception:
+            pass
+        return {
+            "status": "success",
+            "message": f"Mute выключен для чата {cid}",
+            "muted": False,
+            "chat_id": cid,
+        }
 
     if cmd == "status":
-        is_muted = chat_id in (manager.muted.get(phone) or set())
+        is_muted = _is_muted(manager, phone, chat_id)
         ai = getattr(manager, "ai_settings", {}).get(phone) or {}
         err = (ai.get("last_error") or "").strip()
         key = (ai.get("api_key") or "").strip()
