@@ -75,6 +75,7 @@ function App() {
   const [trigReply, setTrigReply] = useState('')
   const [trigMode, setTrigMode] = useState('contains')
   const [lightbox, setLightbox] = useState(null)
+  const [mediaCache, setMediaCache] = useState({}) // messageId -> { url, mime, name, loading, error }
   const [explodingIds, setExplodingIds] = useState(new Set())
   const [mutedIds, setMutedIds] = useState(() => {
     try {
@@ -326,6 +327,57 @@ function App() {
       const keep = (msgs || []).slice(-80)
       localStorage.setItem('tg_system_log', JSON.stringify(keep))
     } catch (e) {}
+  }
+
+  const loadMedia = async (messageId, chatId) => {
+    if (!phone || !messageId || !chatId || isLocalChat(chatId)) return null
+    const key = String(messageId)
+    if (mediaCache[key]?.url) return mediaCache[key]
+    if (mediaCache[key]?.loading) return null
+    setMediaCache((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), loading: true, error: null } }))
+    try {
+      const res = await fetch(`${API_URL}/chats/media`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, chat_id: chatId, message_id: messageId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'success' || !data.data_base64) {
+        const err = data.message || 'Не удалось загрузить медиа'
+        setMediaCache((prev) => ({ ...prev, [key]: { loading: false, error: err } }))
+        return null
+      }
+      const bin = atob(data.data_base64)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      const blob = new Blob([bytes], { type: data.mime || 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const entry = {
+        url,
+        mime: data.mime,
+        name: data.name || `file_${messageId}`,
+        type: data.type,
+        size: data.size,
+        loading: false,
+        error: null,
+      }
+      setMediaCache((prev) => ({ ...prev, [key]: entry }))
+      return entry
+    } catch (e) {
+      setMediaCache((prev) => ({
+        ...prev,
+        [key]: { loading: false, error: String(e.message || e) },
+      }))
+      return null
+    }
+  }
+
+  const saveMediaBlob = (entry) => {
+    if (!entry?.url) return
+    const a = document.createElement('a')
+    a.href = entry.url
+    a.download = entry.name || 'file'
+    a.click()
   }
 
   const loadMessages = async (chatId, p = phone) => {
@@ -816,30 +868,120 @@ function App() {
                   className={`bubble ${m.out ? 'out' : 'in'}${m.system ? ' system' : ''}${m.error ? ' sys-error' : ''}${explodingIds.has(m.id) ? ' explode' : ''}`}
                 >
                   {!m.out && m.sender && <div className="bubble-sender">{m.sender}</div>}
-                  {m.media && m.media.type === 'photo' && m.media.thumb && (
-                    <img
-                      className="bubble-photo"
-                      src={m.media.thumb}
-                      alt="фото"
-                      onClick={() => setLightbox(m.media.thumb)}
-                    />
-                  )}
-                  {m.media && m.media.type === 'photo' && !m.media.thumb && (
-                    <div className="media-card">📷 Фото</div>
+                  {m.media && m.media.type === 'photo' && (
+                    <div className="media-block">
+                      {(m.media.thumb || mediaCache[String(m.id)]?.url) ? (
+                        <img
+                          className="bubble-photo"
+                          src={mediaCache[String(m.id)]?.url || m.media.thumb}
+                          alt="фото"
+                          onClick={() => setLightbox(mediaCache[String(m.id)]?.url || m.media.thumb)}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="media-card media-btn"
+                          disabled={mediaCache[String(m.id)]?.loading}
+                          onClick={() => loadMedia(m.id, activeChat.id)}
+                        >
+                          {mediaCache[String(m.id)]?.loading ? 'Загрузка…' : '📷 Показать фото'}
+                        </button>
+                      )}
+                      {mediaCache[String(m.id)]?.error && (
+                        <div className="media-err">{mediaCache[String(m.id)].error}</div>
+                      )}
+                      {(m.media.thumb || mediaCache[String(m.id)]?.url) && (
+                        <button
+                          type="button"
+                          className="media-save-btn"
+                          onClick={async () => {
+                            let e = mediaCache[String(m.id)]
+                            if (!e?.url) e = await loadMedia(m.id, activeChat.id)
+                            if (e?.url) saveMediaBlob(e)
+                            else if (m.media.thumb) {
+                              const a = document.createElement('a')
+                              a.href = m.media.thumb
+                              a.download = 'photo.jpg'
+                              a.click()
+                            }
+                          }}
+                        >
+                          💾 Сохранить
+                        </button>
+                      )}
+                    </div>
                   )}
                   {m.media && (m.media.type === 'audio' || m.media.type === 'voice') && (
-                    <div className="media-card audio">
-                      {m.media.type === 'voice' ? '🎤 Голосовое' : '🎵'} {m.media.name || m.media.label}
-                      {m.media.duration != null && <span> · {m.media.duration}s</span>}
+                    <div className="media-block">
+                      <div className="media-card audio">
+                        {m.media.type === 'voice' ? '🎤 Голосовое' : '🎵'} {m.media.name || m.media.label}
+                        {m.media.duration != null && <span> · {m.media.duration}s</span>}
+                      </div>
+                      {mediaCache[String(m.id)]?.url ? (
+                        <>
+                          <audio className="media-player" controls src={mediaCache[String(m.id)].url} />
+                          <button type="button" className="media-save-btn" onClick={() => saveMediaBlob(mediaCache[String(m.id)])}>💾 Сохранить</button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="media-card media-btn"
+                          disabled={mediaCache[String(m.id)]?.loading}
+                          onClick={() => loadMedia(m.id, activeChat.id)}
+                        >
+                          {mediaCache[String(m.id)]?.loading ? 'Загрузка…' : '▶ Открыть'}
+                        </button>
+                      )}
+                      {mediaCache[String(m.id)]?.error && (
+                        <div className="media-err">{mediaCache[String(m.id)].error}</div>
+                      )}
                     </div>
                   )}
                   {m.media && m.media.type === 'video' && (
-                    <div className="media-card">🎬 {m.media.name || 'Видео'}</div>
+                    <div className="media-block">
+                      <div className="media-card">🎬 {m.media.name || 'Видео'}</div>
+                      {mediaCache[String(m.id)]?.url ? (
+                        <>
+                          <video className="media-player video" controls src={mediaCache[String(m.id)].url} />
+                          <button type="button" className="media-save-btn" onClick={() => saveMediaBlob(mediaCache[String(m.id)])}>💾 Сохранить</button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="media-card media-btn"
+                          disabled={mediaCache[String(m.id)]?.loading}
+                          onClick={() => loadMedia(m.id, activeChat.id)}
+                        >
+                          {mediaCache[String(m.id)]?.loading ? 'Загрузка…' : '▶ Открыть видео'}
+                        </button>
+                      )}
+                      {mediaCache[String(m.id)]?.error && (
+                        <div className="media-err">{mediaCache[String(m.id)].error}</div>
+                      )}
+                    </div>
                   )}
                   {m.media && m.media.type === 'file' && (
-                    <div className="media-card file">
-                      📎 {m.media.name || 'Файл'}
-                      {m.media.size ? <span> · {Math.round(m.media.size/1024)} KB</span> : null}
+                    <div className="media-block">
+                      <div className="media-card file">
+                        📎 {m.media.name || 'Файл'}
+                        {m.media.size ? <span> · {Math.round(m.media.size / 1024)} KB</span> : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="media-card media-btn"
+                        disabled={mediaCache[String(m.id)]?.loading}
+                        onClick={async () => {
+                          const e = mediaCache[String(m.id)]?.url
+                            ? mediaCache[String(m.id)]
+                            : await loadMedia(m.id, activeChat.id)
+                          if (e?.url) saveMediaBlob(e)
+                        }}
+                      >
+                        {mediaCache[String(m.id)]?.loading ? 'Загрузка…' : '⬇ Скачать'}
+                      </button>
+                      {mediaCache[String(m.id)]?.error && (
+                        <div className="media-err">{mediaCache[String(m.id)].error}</div>
+                      )}
                     </div>
                   )}
                   {m.media && m.media.type === 'webpage' && (
