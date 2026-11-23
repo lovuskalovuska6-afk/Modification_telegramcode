@@ -1,0 +1,107 @@
+"""Менеджер Telegram-клиентов + сессии + чаты + mute + ИИ автоответ."""
+
+from pathlib import Path
+from typing import Dict, Optional, List, Any
+import hashlib
+import re
+import asyncio
+
+from app.config import settings
+from app.client.tg_loop import on_tg_loop
+
+MOCK = settings.is_mock
+
+try:
+    from app.client.live_features import (
+        attach_handlers,
+        run_extra_command,
+        default_ai,
+        AI_PRESETS,
+    )
+except Exception:  # pragma: no cover
+    attach_handlers = None
+    run_extra_command = None
+
+    def default_ai() -> dict:
+        return {
+            "enabled": False,
+            "provider": "groq",
+            "api_key": "",
+            "model": "llama-3.3-70b-versatile",
+            "api_base": "https://api.groq.com/openai/v1",
+        }
+
+    AI_PRESETS = {
+        "groq": {"base": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile"},
+        "openrouter": {"base": "https://openrouter.ai/api/v1", "model": "openai/gpt-4o-mini"},
+        "openai": {"base": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
+    }
+
+
+class TelethonManager:
+    def __init__(self):
+        self.sessions_dir = settings.SESSIONS_DIR
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+
+        self.clients: Dict[str, object] = {}
+        self.phone_code_hashes: Dict[str, str] = {}
+        self.string_sessions: Dict[str, str] = {}
+
+        self.mock_users: Dict[str, dict] = {}
+        self.mock_codes: Dict[str, str] = {}
+        self.mock_dialogs: Dict[str, list] = {}
+        self.mock_messages: Dict[str, Dict[int, list]] = {}
+        self.muted: Dict[str, set] = {}
+        self.ai_settings: Dict[str, dict] = {}
+        self._handlers_ready: set = set()
+
+    def _session_path(self, phone: str) -> Path:
+        clean = "".join(c for c in phone if c.isdigit())
+        return self.sessions_dir / f"{clean}.session"
+
+    def _ensure_api_keys(self) -> Optional[dict]:
+        if not settings.has_api_keys:
+            return {"status": "error", "message": "На сервере не заданы API_ID и API_HASH."}
+        return None
+
+    async def _ensure_client(self, phone: str):
+        client = self.clients.get(phone)
+        if client is not None:
+            if not MOCK and hasattr(client, "is_connected") and not client.is_connected():
+                await client.connect()
+            return client
+        sess = self.string_sessions.get(phone)
+        if sess and not MOCK:
+            return await self._real_get_or_create_client(phone, session_str=sess)
+        if not MOCK and self._session_path(phone).exists():
+            return await self._real_get_or_create_client(phone)
+        raise RuntimeError("Нет активной сессии. Войдите или загрузите сессию.")
+
+    # ==================== MOCK AUTH ====================
+
+    async def _mock_send_code(self, phone: str) -> dict:
+        if phone in self.mock_users:
+            return {"status": "already_authorized", "message": "Уже авторизован", "user": self.mock_users[phone]}
+        self.mock_codes[phone] = "12345"
+        self.phone_code_hashes[phone] = "mock_hash_" + phone
+        return {"status": "code_sent", "message": "Код отправлен (заглушка). Используй код: 12345"}
+
+    async def _mock_sign_in(self, phone, code, password=None, first_name=None, last_name=None) -> dict:
+        if phone in self.mock_users:
+            sess = self.string_sessions.get(phone) or self._mock_make_session(phone)
+            self.string_sessions[phone] = sess
+            self._init_mock_chats(phone)
+            return {"status": "success", "message": "Уже авторизован", "user": self.mock_users[phone], "session": sess}
+        if phone not in self.phone_code_hashes:
+            return {"status": "error", "message": "Сначала запросите код"}
+        if not first_name:
+            return {"status": "need_signup", "message": "Аккаунт не найден. Нужна регистрация"}
+        user_id = int(hashlib.md5(phone.encode()).hexdigest()[:8], 16) % 10_000_000
+        user = {"id": user_id, "first_name": first_name, "last_name": last_name or "", "username": None, "phone": phone}
+        self.mock_users[phone] = user
+        sess = self._mock_make_session(phone)
+        self.string_sessions[phone] = sess
+        self._init_mock_chats(phone)
+        return {"status": "success", "message": "Успешная регистрация (заглушка)", "user": user, "session": sess}
+
+    def _m
