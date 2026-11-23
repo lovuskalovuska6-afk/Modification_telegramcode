@@ -21,6 +21,9 @@ try:
         save_ai_to_disk,
         load_mute_from_disk,
         save_mute_to_disk,
+        load_triggers_from_disk,
+        save_triggers_to_disk,
+        ai_generate,
         FREE_MODELS,
     )
 except Exception:  # pragma: no cover
@@ -30,6 +33,9 @@ except Exception:  # pragma: no cover
     save_ai_to_disk = None
     load_mute_from_disk = None
     save_mute_to_disk = None
+    load_triggers_from_disk = None
+    save_triggers_to_disk = None
+    ai_generate = None
     FREE_MODELS = {
         "groq": ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "allam-2-7b"],
         "openrouter": [
@@ -86,6 +92,12 @@ class TelethonManager:
                 self.ai_settings = load_ai_from_disk(self.sessions_dir) or {}
             except Exception:
                 self.ai_settings = {}
+        self.triggers: Dict[str, list] = {}
+        if load_triggers_from_disk is not None:
+            try:
+                self.triggers = load_triggers_from_disk(self.sessions_dir) or {}
+            except Exception:
+                self.triggers = {}
         self._handlers_ready: set = set()
 
     def _session_path(self, phone: str) -> Path:
@@ -455,12 +467,23 @@ class TelethonManager:
             messages = await client.get_messages(chat_id, limit=limit)
             for m in reversed(list(messages)):
                 text = m.message or ""
-                if not text and m.media:
-                    text = "[медиа]"
+                media_info = None
+                if m.media:
+                    media_info = await self._describe_media(client, m)
+                    if not text:
+                        text = (media_info or {}).get("label") or "[медиа]"
                 sender_name = ""
                 try:
                     if m.sender:
                         sender_name = getattr(m.sender, "first_name", None) or getattr(m.sender, "title", None) or ""
+                except Exception:
+                    pass
+                reactions = []
+                try:
+                    if getattr(m, "reactions", None) and getattr(m.reactions, "results", None):
+                        for r in m.reactions.results:
+                            emo = getattr(getattr(r, "reaction", None), "emoticon", None) or "👍"
+                            reactions.append({"emoji": emo, "count": int(getattr(r, "count", 1) or 1)})
                 except Exception:
                     pass
                 result.append({
@@ -469,10 +492,81 @@ class TelethonManager:
                     "out": bool(m.out),
                     "date": m.date.strftime("%H:%M") if m.date else "",
                     "sender": sender_name or ("Вы" if m.out else ""),
+                    "media": media_info,
+                    "reactions": reactions,
                 })
             return {"status": "success", "messages": result, "me_id": me.id}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    async def _describe_media(self, client, m) -> dict:
+        """Тип медиа + превью фото (base64) если небольшое."""
+        import base64
+        from telethon.tl.types import (
+            MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage,
+        )
+        info = {"type": "unknown", "label": "[медиа]", "thumb": None, "name": None, "mime": None, "size": None}
+        try:
+            media = m.media
+            if isinstance(media, MessageMediaPhoto) or (getattr(m, "photo", None)):
+                info["type"] = "photo"
+                info["label"] = "📷 Фото"
+                try:
+                    data = await client.download_media(m, file=bytes)
+                    if data and len(data) < 350_000:
+                        info["thumb"] = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
+                        info["size"] = len(data)
+                except Exception:
+                    pass
+                return info
+            if isinstance(media, MessageMediaDocument) or getattr(m, "document", None):
+                doc = getattr(m, "document", None) or getattr(media, "document", None)
+                mime = getattr(doc, "mime_type", "") or ""
+                name = None
+                duration = None
+                for attr in getattr(doc, "attributes", []) or []:
+                    n = getattr(attr, "file_name", None)
+                    if n:
+                        name = n
+                    if getattr(attr, "duration", None) is not None and hasattr(attr, "voice"):
+                        duration = attr.duration
+                        info["type"] = "voice"
+                        info["label"] = "🎤 Голосовое"
+                    elif getattr(attr, "duration", None) is not None and "audio" in mime:
+                        duration = attr.duration
+                        info["type"] = "audio"
+                        info["label"] = "🎵 Аудио"
+                    elif getattr(attr, "duration", None) is not None and "video" in mime:
+                        duration = attr.duration
+                        info["type"] = "video"
+                        info["label"] = "🎬 Видео"
+                if info["type"] == "unknown":
+                    if "image" in mime:
+                        info["type"] = "photo"
+                        info["label"] = "📷 Изображение"
+                    elif "audio" in mime:
+                        info["type"] = "audio"
+                        info["label"] = "🎵 Аудио"
+                    elif "video" in mime:
+                        info["type"] = "video"
+                        info["label"] = "🎬 Видео"
+                    else:
+                        info["type"] = "file"
+                        info["label"] = "📎 Файл"
+                info["name"] = name
+                info["mime"] = mime
+                info["size"] = getattr(doc, "size", None)
+                info["duration"] = duration
+                if name:
+                    info["label"] = f"{info['label']}: {name}"
+                return info
+            if isinstance(media, MessageMediaWebPage):
+                info["type"] = "webpage"
+                info["label"] = "🔗 Ссылка"
+                return info
+        except Exception:
+            pass
+        return info
 
     @on_tg_loop
     async def send_message(self, phone: str, chat_id: int, text: str) -> dict:
@@ -766,6 +860,62 @@ class TelethonManager:
         if MOCK:
             return await self._mock_load_session(session_str, phone)
         return await self._real_load_session(session_str, phone)
+
+    @on_tg_loop
+    async def get_triggers(self, phone: str) -> dict:
+        items = list(self.triggers.get(phone) or [])
+        return {"status": "success", "triggers": items}
+
+    @on_tg_loop
+    async def set_triggers(self, phone: str, triggers: list) -> dict:
+        clean = []
+        for t in (triggers or [])[:50]:
+            if not isinstance(t, dict):
+                continue
+            pat = str(t.get("pattern") or "").strip()
+            if not pat:
+                continue
+            clean.append({
+                "id": str(t.get("id") or f"t{len(clean)+1}"),
+                "pattern": pat[:200],
+                "reply": str(t.get("reply") or "")[:2000],
+                "mode": str(t.get("mode") or "contains")[:20],
+                "enabled": bool(t.get("enabled", True)),
+            })
+        self.triggers[phone] = clean
+        if save_triggers_to_disk is not None:
+            try:
+                save_triggers_to_disk(self.sessions_dir, self.triggers)
+            except Exception:
+                pass
+        return {"status": "success", "triggers": clean, "message": f"Сохранено триггеров: {len(clean)}"}
+
+    @on_tg_loop
+    async def local_ai_chat(self, phone: str, message: str, history: list = None) -> dict:
+        """Локальный ИИ-чат только на сайте (не Telegram)."""
+        if ai_generate is None:
+            return {"status": "error", "message": "AI недоступен"}
+        hist = []
+        for h in (history or [])[-12]:
+            if isinstance(h, dict) and h.get("content"):
+                hist.append({"role": h.get("role") or "user", "content": str(h["content"])[:800]})
+        me_info = None
+        try:
+            if phone in self.clients and not MOCK:
+                me = await self.clients[phone].get_me()
+                me_info = {
+                    "first_name": getattr(me, "first_name", "") or "",
+                    "last_name": getattr(me, "last_name", "") or "",
+                    "username": getattr(me, "username", "") or "",
+                }
+        except Exception:
+            pass
+        reply, err = await ai_generate(self, phone, message, history=hist, me_info=me_info)
+        if err:
+            return {"status": "error", "message": err}
+        return {"status": "success", "reply": reply}
+
+
 
 
 telethon_manager = TelethonManager()
