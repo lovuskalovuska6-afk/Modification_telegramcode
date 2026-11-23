@@ -1,7 +1,5 @@
-"""Load TelethonManager from split base64 payload."""
+"""Assemble TelethonManager from source chunks."""
 from pathlib import Path
-import base64
-
 _dir = Path(__file__).parent
-_payload = (_dir / "telethon_manager.b64.a").read_text().strip() + (_dir / "telethon_manager.b64.b").read_text().strip()
-exec(base64.b64decode(_payload).decode("utf-8"), globals())
+_code = "".join((_dir / f"mgr_src_{i}.txt").read_text() for i in range(6))
+exec(_code, globals())
