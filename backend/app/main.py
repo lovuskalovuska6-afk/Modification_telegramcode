@@ -1,16 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import auth, chats
+from app.api import settings as settings_api
 from app.config import settings
-from app.api.auth import router as auth_router
-from app.api.chats import router as chats_router
-from app.client.telethon_manager import MOCK
 
-app = FastAPI(
-    title="TelegramCode",
-    description="Улучшенный клиент Telegram",
-    version="0.2.0",
-)
+app = FastAPI(title="TelegramCode API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,27 +15,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router, prefix="/api")
-app.include_router(chats_router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(chats.router, prefix="/api")
+app.include_router(settings_api.router, prefix="/api")
 
 
 @app.get("/")
-async def root():
-    return {
-        "status": "ok",
-        "message": "TelegramCode API",
-        "version": "0.2.0",
-        "mode": "mock" if MOCK else "real",
-        "has_api_keys": settings.has_api_keys,
-    }
-
-
 @app.get("/health")
 async def health():
     return {
         "status": "healthy",
-        "mock": MOCK,
+        "mock": settings.is_mock,
         "has_api_keys": settings.has_api_keys,
         "api_id_set": bool(settings.API_ID),
-        "api_hash_len": len(settings.API_HASH or ""),
+        "api_hash_len": len(settings.API_HASH or "") if settings.API_HASH else 0,
+        "version": "0.3.0",
     }
