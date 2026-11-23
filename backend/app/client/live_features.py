@@ -120,8 +120,15 @@ def _norm_chat_id(cid) -> int:
 
 
 def _muted_set(manager, phone: str) -> set:
-    s = getattr(manager, "muted", {}).get(phone) or set()
-    return {_norm_chat_id(x) for x in s}
+    muted = getattr(manager, "muted", {}) or {}
+    out = set()
+    phone_digits = "".join(c for c in str(phone) if c.isdigit())
+    for k, s in muted.items():
+        kd = "".join(c for c in str(k) if c.isdigit())
+        if k == phone or (phone_digits and kd == phone_digits):
+            for x in s or []:
+                out.add(_norm_chat_id(x))
+    return out
 
 
 def _is_muted(manager, phone: str, chat_id) -> bool:
@@ -424,7 +431,10 @@ async def run_extra_command(manager, phone, chat_id, cmd, args, MOCK, send_messa
         cid = _norm_chat_id(chat_id)
         if not cid:
             return {"status": "error", "message": "Mute только в реальном чате (открой чат и напиши mute там)"}
-        manager.muted.setdefault(phone, set()).add(cid)
+        keys = {phone, "".join(c for c in str(phone) if c.isdigit())}
+        for k in keys:
+            if k:
+                manager.muted.setdefault(k, set()).add(cid)
         try:
             sd = getattr(manager, "sessions_dir", None)
             if sd:
@@ -440,7 +450,10 @@ async def run_extra_command(manager, phone, chat_id, cmd, args, MOCK, send_messa
 
     if cmd == "unmute":
         cid = _norm_chat_id(chat_id)
-        manager.muted.setdefault(phone, set()).discard(cid)
+        keys = {phone, "".join(c for c in str(phone) if c.isdigit())}
+        for k in keys:
+            if k:
+                manager.muted.setdefault(k, set()).discard(cid)
         try:
             sd = getattr(manager, "sessions_dir", None)
             if sd:
