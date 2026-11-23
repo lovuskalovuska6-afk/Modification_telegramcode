@@ -7,6 +7,7 @@ import re
 import asyncio
 
 from app.config import settings
+from app.client.tg_loop import on_tg_loop
 
 MOCK = settings.is_mock
 
@@ -35,11 +36,18 @@ class TelethonManager:
             return {"status": "error", "message": "На сервере не заданы API_ID и API_HASH."}
         return None
 
-    def _ensure_client(self, phone: str):
+    async def _ensure_client(self, phone: str):
         client = self.clients.get(phone)
-        if not client:
-            raise RuntimeError("Нет активной сессии. Войдите или загрузите сессию.")
-        return client
+        if client is not None:
+            if not MOCK and hasattr(client, "is_connected") and not client.is_connected():
+                await client.connect()
+            return client
+        sess = self.string_sessions.get(phone)
+        if sess and not MOCK:
+            return await self._real_get_or_create_client(phone, session_str=sess)
+        if not MOCK and self._session_path(phone).exists():
+            return await self._real_get_or_create_client(phone)
+        raise RuntimeError("Нет активной сессии. Войдите или загрузите сессию.")
 
     # ==================== MOCK AUTH ====================
 
@@ -300,12 +308,13 @@ class TelethonManager:
 
     # ==================== CHATS ====================
 
+    @on_tg_loop
     async def get_dialogs(self, phone: str) -> dict:
         if MOCK:
             self._init_mock_chats(phone)
             return {"status": "success", "dialogs": self.mock_dialogs.get(phone, [])}
         try:
-            client = self._ensure_client(phone)
+            client = await self._ensure_client(phone)
             if not await client.is_user_authorized():
                 return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
             dialogs = []
@@ -331,13 +340,14 @@ class TelethonManager:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    @on_tg_loop
     async def get_messages(self, phone: str, chat_id: int, limit: int = 40) -> dict:
         if MOCK:
             self._init_mock_chats(phone)
             msgs = list(reversed(self.mock_messages.get(phone, {}).get(chat_id, [])))
             return {"status": "success", "messages": msgs}
         try:
-            client = self._ensure_client(phone)
+            client = await self._ensure_client(phone)
             if not await client.is_user_authorized():
                 return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
             me = await client.get_me()
@@ -364,6 +374,7 @@ class TelethonManager:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    @on_tg_loop
     async def send_message(self, phone: str, chat_id: int, text: str) -> dict:
         if MOCK:
             self._init_mock_chats(phone)
@@ -375,7 +386,7 @@ class TelethonManager:
                     d["last_message"] = text[:80]
             return {"status": "success", "message": msg}
         try:
-            client = self._ensure_client(phone)
+            client = await self._ensure_client(phone)
             if not await client.is_user_authorized():
                 return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
             m = await client.send_message(chat_id, text)
@@ -392,6 +403,7 @@ class TelethonManager:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    @on_tg_loop
     async def run_command(self, phone: str, chat_id: int, command: str, args: List[str]) -> dict:
         cmd = (command or "").lower().strip()
         if cmd == "spam":
@@ -422,23 +434,29 @@ class TelethonManager:
 
     # ==================== PUBLIC ====================
 
+    @on_tg_loop
     async def send_code(self, phone: str) -> dict:
         return await self._mock_send_code(phone) if MOCK else await self._real_send_code(phone)
 
+    @on_tg_loop
     async def sign_in(self, phone, code, password=None, first_name=None, last_name=None) -> dict:
         if MOCK:
             return await self._mock_sign_in(phone, code, password, first_name, last_name)
         return await self._real_sign_in(phone, code, password, first_name, last_name)
 
+    @on_tg_loop
     async def logout(self, phone: str) -> dict:
         return await self._mock_logout(phone) if MOCK else await self._real_logout(phone)
 
+    @on_tg_loop
     async def get_me(self, phone: str) -> dict:
         return await self._mock_get_me(phone) if MOCK else await self._real_get_me(phone)
 
+    @on_tg_loop
     async def export_session(self, phone: str) -> dict:
         return await self._mock_export_session(phone) if MOCK else await self._real_export_session(phone)
 
+    @on_tg_loop
     async def load_session(self, session_str: str, phone: Optional[str] = None) -> dict:
         return await self._mock_load_session(session_str, phone) if MOCK else await self._real_load_session(session_str, phone)
 

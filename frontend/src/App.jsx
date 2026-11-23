@@ -44,7 +44,7 @@ function App() {
     } catch (e) {}
   }
 
-  const loadDialogs = async (p = phone) => {
+  const loadDialogs = async (p = phone, tried = false) => {
     if (!p) return
     setChatsLoading(true)
     try {
@@ -54,8 +54,37 @@ function App() {
         body: JSON.stringify({ phone: p }),
       })
       const data = await res.json()
-      if (data.status === 'success') setDialogs(data.dialogs || [])
-      else setError(data.message || 'Не удалось загрузить чаты')
+      if (data.status === 'success') {
+        setDialogs(data.dialogs || [])
+        setError('')
+      } else if (!tried) {
+        const saved = localStorage.getItem('tg_session') || ''
+        const savedPhone = localStorage.getItem('tg_phone') || p
+        if (saved) {
+          const lr = await fetch(`${API_URL}/auth/load-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: saved, phone: savedPhone }),
+          })
+          const ld = await lr.json()
+          if (ld.status === 'success') {
+            const next = ld.phone || savedPhone
+            if (ld.user) setUser(ld.user)
+            if (ld.session) setSessionStr(ld.session)
+            saveLocal(next, ld.session || saved, ld.user)
+            if (next !== p) {
+              setPhone(next)
+              setChatsLoading(false)
+              return
+            }
+            setChatsLoading(false)
+            return loadDialogs(next, true)
+          }
+        }
+        setError(data.message || 'Не удалось загрузить чаты')
+      } else {
+        setError(data.message || 'Не удалось загрузить чаты')
+      }
     } catch (e) {
       setError('Ошибка загрузки чатов')
     }
@@ -125,6 +154,20 @@ function App() {
       setError('Ошибка отправки')
     }
   }
+
+  useEffect(() => {
+    const p = localStorage.getItem('tg_phone') || ''
+    const s = localStorage.getItem('tg_session') || ''
+    if (!p || !s) return
+    try {
+      const raw = localStorage.getItem('tg_user')
+      if (raw) setUser(JSON.parse(raw))
+    } catch (e) {}
+    setSessionStr(s)
+    setPhone(p)
+    setActiveMenu('chats')
+    setScreen('app')
+  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
