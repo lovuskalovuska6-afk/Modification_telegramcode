@@ -66,6 +66,7 @@ function App() {
   const [text, setText] = useState('')
   const [cmdMode, setCmdMode] = useState(false)
   const [chatsLoading, setChatsLoading] = useState(false)
+  const [msgsLoading, setMsgsLoading] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(() => {
     try { return localStorage.getItem('tg_onboarding_done') !== '1' } catch (e) { return true }
   })
@@ -383,10 +384,11 @@ function App() {
   // защита от гонки: ответ старого чата не должен перетирать новый
   const messagesReqId = useRef(0)
 
-  const loadMessages = async (chatId, p = phone) => {
+  const loadMessages = async (chatId, p = phone, showSpinner = false) => {
     if (!p || !chatId || isLocalChat(chatId)) return
     const reqId = ++messagesReqId.current
     const targetId = chatId
+    if (showSpinner) setMsgsLoading(true)
     try {
       const res = await fetch(`${API_URL}/chats/messages`, {
         method: 'POST',
@@ -403,7 +405,10 @@ function App() {
         const next = data.messages || []
         setMessages((prev) => (msgsEqual(prev, next) ? prev : next))
       }
-    } catch (e) {}
+    } catch (e) {
+    } finally {
+      if (reqId === messagesReqId.current) setMsgsLoading(false)
+    }
   }
 
   const openChat = (d) => {
@@ -414,14 +419,16 @@ function App() {
     setMenuOpen(false)
     // инвалидируем предыдущие запросы сообщений
     messagesReqId.current += 1
+    setMsgsLoading(false)
     if (isSystemChat(d.id)) {
       setMessages(systemMessages)
     } else if (isLocalAiChat(d.id)) {
       setMessages(localAiMessages)
     } else {
-      // мгновенно очищаем ленту, чтобы не мигали сообщения прошлого чата
+      // мгновенно очищаем ленту + полоска загрузки; медиа не блокирует список
       setMessages([])
-      loadMessages(d.id)
+      setMsgsLoading(true)
+      loadMessages(d.id, phone, true)
     }
   }
 
@@ -881,7 +888,17 @@ function App() {
                 )}
               </div>
             </div>
+            {msgsLoading && (
+              <div className="msgs-loading-bar" title="Загрузка сообщений">
+                <div className="msgs-loading-bar-inner" />
+              </div>
+            )}
             <div className="messages-list">
+              {msgsLoading && messages.length === 0 && (
+                <div className="hint pad" style={{ textAlign: 'center', paddingTop: 24 }}>
+                  Загрузка сообщений…
+                </div>
+              )}
               {messages.map((m) => (
                 <div
                   key={m.id}
@@ -897,14 +914,18 @@ function App() {
                           alt="фото"
                           onClick={() => setLightbox(mediaCache[String(m.id)]?.url || m.media.thumb)}
                         />
+                      ) : mediaCache[String(m.id)]?.loading ? (
+                        <div className="media-card media-loading">
+                          📷 Загрузка фото…
+                          <div className="media-progress"><div className="media-progress-inner" /></div>
+                        </div>
                       ) : (
                         <button
                           type="button"
                           className="media-card media-btn"
-                          disabled={mediaCache[String(m.id)]?.loading}
                           onClick={() => loadMedia(m.id, activeChat.id)}
                         >
-                          {mediaCache[String(m.id)]?.loading ? 'Загрузка…' : '📷 Показать фото'}
+                          📷 Показать фото
                         </button>
                       )}
                       {mediaCache[String(m.id)]?.error && (
@@ -942,14 +963,18 @@ function App() {
                           <audio className="media-player" controls src={mediaCache[String(m.id)].url} />
                           <button type="button" className="media-save-btn" onClick={() => saveMediaBlob(mediaCache[String(m.id)])}>💾 Сохранить</button>
                         </>
+                      ) : mediaCache[String(m.id)]?.loading ? (
+                        <div className="media-card media-loading">
+                          Загрузка аудио…
+                          <div className="media-progress"><div className="media-progress-inner" /></div>
+                        </div>
                       ) : (
                         <button
                           type="button"
                           className="media-card media-btn"
-                          disabled={mediaCache[String(m.id)]?.loading}
                           onClick={() => loadMedia(m.id, activeChat.id)}
                         >
-                          {mediaCache[String(m.id)]?.loading ? 'Загрузка…' : '▶ Открыть'}
+                          ▶ Открыть
                         </button>
                       )}
                       {mediaCache[String(m.id)]?.error && (
@@ -965,14 +990,18 @@ function App() {
                           <video className="media-player video" controls src={mediaCache[String(m.id)].url} />
                           <button type="button" className="media-save-btn" onClick={() => saveMediaBlob(mediaCache[String(m.id)])}>💾 Сохранить</button>
                         </>
+                      ) : mediaCache[String(m.id)]?.loading ? (
+                        <div className="media-card media-loading">
+                          🎬 Загрузка видео…
+                          <div className="media-progress"><div className="media-progress-inner" /></div>
+                        </div>
                       ) : (
                         <button
                           type="button"
                           className="media-card media-btn"
-                          disabled={mediaCache[String(m.id)]?.loading}
                           onClick={() => loadMedia(m.id, activeChat.id)}
                         >
-                          {mediaCache[String(m.id)]?.loading ? 'Загрузка…' : '▶ Открыть видео'}
+                          ▶ Открыть видео
                         </button>
                       )}
                       {mediaCache[String(m.id)]?.error && (
