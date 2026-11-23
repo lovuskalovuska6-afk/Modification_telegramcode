@@ -290,9 +290,21 @@ function App() {
           setArchivedDialogs([])
         }
         if (Array.isArray(data.muted_ids)) {
-          const s = new Set(data.muted_ids.map(Number))
-          setMutedIds(s)
-          try { localStorage.setItem('tg_muted_ids', JSON.stringify([...s])) } catch (e) {}
+          // мержим с локальным, чтобы бейдж не пропадал из-за рассинхрона phone-ключа на сервере
+          setMutedIds((prev) => {
+            const s = new Set([...prev].map(Number))
+            data.muted_ids.forEach((id) => s.add(Number(id)))
+            // если сервер прислал список — доверяем ему как источнику истины, но не обнуляем prev пустым сбоем
+            if (data.muted_ids.length > 0 || prev.size === 0) {
+              const only = new Set(data.muted_ids.map(Number))
+              // если сервер знает муты — берём сервер; иначе оставляем prev
+              const final = data.muted_ids.length > 0 ? only : s
+              try { localStorage.setItem('tg_muted_ids', JSON.stringify([...final])) } catch (e) {}
+              return final
+            }
+            try { localStorage.setItem('tg_muted_ids', JSON.stringify([...s])) } catch (e) {}
+            return s
+          })
         }
         if (typeof data.ai_enabled === 'boolean') {
           setAiEnabled(data.ai_enabled)
@@ -596,16 +608,24 @@ function App() {
           } else {
             pushSystemMsg(`Команда «${command}» выполнена`, false)
           }
-          // mute/unmute — обновляем бейджи
+          // mute/unmute — обновляем бейджи сразу (и activeChat для шапки)
           if (command === 'mute' || command === 'unmute') {
             const cid = Number(data.chat_id != null ? data.chat_id : chatIdForCmd)
+            const isOn = command === 'mute'
             setMutedIds((prev) => {
-              const next = new Set(prev)
-              if (command === 'mute') next.add(cid)
+              const next = new Set([...prev].map(Number).filter((n) => !Number.isNaN(n)))
+              if (isOn) next.add(cid)
               else next.delete(cid)
               try { localStorage.setItem('tg_muted_ids', JSON.stringify([...next])) } catch (e) {}
               return next
             })
+            setActiveChat((prev) => {
+              if (!prev) return prev
+              if (Number(prev.id) !== cid && Number(prev.id) !== Number(chatIdForCmd)) return prev
+              return { ...prev, muted: isOn }
+            })
+            setDialogs((prev) => prev.map((d) => (Number(d.id) === cid ? { ...d, muted: isOn } : d)))
+            setArchivedDialogs((prev) => prev.map((d) => (Number(d.id) === cid ? { ...d, muted: isOn } : d)))
           }
           if (command === 'ai' && (args[0] === 'on' || args[0] === 'off')) {
             setAiEnabled(args[0] === 'on' || args[0] === 'вкл')
@@ -917,7 +937,7 @@ function App() {
                   <span className="chat-badge local">только сайт</span>
                 ) : (
                   <>
-                    {mutedIds.has(Number(activeChat.id)) && (
+                    {(activeChat.muted || mutedIds.has(Number(activeChat.id))) && (
                       <span className="chat-badge mute" title="Входящие удаляются">🔇 МУТ</span>
                     )}
                     {aiEnabled && !activeChat.is_group && !activeChat.is_channel && (
