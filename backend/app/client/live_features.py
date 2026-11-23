@@ -213,6 +213,28 @@ async def handle_incoming(manager, phone: str, event) -> None:
     if not text:
         return
 
+    # Пользовательские триггеры (до ИИ)
+    try:
+        triggers = getattr(manager, "triggers", {}).get(phone) or []
+        low = text.lower()
+        for tr in triggers:
+            if not tr.get("enabled", True):
+                continue
+            pat = (tr.get("pattern") or "").strip().lower()
+            if not pat:
+                continue
+            mode = (tr.get("mode") or "contains").lower()
+            hit = (low == pat) if mode == "exact" else (
+                low.startswith(pat) if mode == "startswith" else (pat in low)
+            )
+            if hit:
+                reply_t = (tr.get("reply") or "").strip()
+                if reply_t:
+                    await event.respond(reply_t)
+                    return
+    except Exception:
+        pass
+
     history = []
     me_info = None
     try:
@@ -525,3 +547,24 @@ async def run_extra_command(manager, phone, chat_id, cmd, args, MOCK, send_messa
         return {"status": "success", "message": f"chat_id={chat_id}; muted={'да' if is_muted else 'нет'}"}
 
     return None
+
+
+def load_triggers_from_disk(sessions_dir: Path) -> Dict[str, list]:
+    path = Path(sessions_dir) / "triggers.json"
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): (v if isinstance(v, list) else []) for k, v in data.items()}
+    except Exception:
+        pass
+    return {}
+
+
+def save_triggers_to_disk(sessions_dir: Path, triggers: Dict[str, list]) -> None:
+    path = Path(sessions_dir) / "triggers.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(triggers or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
