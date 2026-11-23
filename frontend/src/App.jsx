@@ -66,6 +66,16 @@ function App() {
   const [text, setText] = useState('')
   const [cmdMode, setCmdMode] = useState(false)
   const [chatsLoading, setChatsLoading] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try { return localStorage.getItem('tg_onboarding_done') !== '1' } catch (e) { return true }
+  })
+  const [onboardStep, setOnboardStep] = useState(0)
+  const [triggers, setTriggers] = useState([])
+  const [trigPattern, setTrigPattern] = useState('')
+  const [trigReply, setTrigReply] = useState('')
+  const [trigMode, setTrigMode] = useState('contains')
+  const [lightbox, setLightbox] = useState(null)
+  const [explodingIds, setExplodingIds] = useState(new Set())
   const [mutedIds, setMutedIds] = useState(() => {
     try {
       const raw = localStorage.getItem('tg_muted_ids')
@@ -75,10 +85,18 @@ function App() {
   })
   // Локальный чат только на сайте (не в Telegram)
   const SYSTEM_CHAT_ID = 'local_system'
+  const LOCAL_AI_CHAT_ID = 'local_ai'
   const SYSTEM_CHAT = {
     id: SYSTEM_CHAT_ID,
     title: '⚡ TelegramCode',
     last_message: 'Команды и ошибки ИИ',
+    unread: 0,
+    local: true,
+  }
+  const LOCAL_AI_CHAT = {
+    id: LOCAL_AI_CHAT_ID,
+    title: '🤖 ИИ-помощник',
+    last_message: 'Локальный чат с ИИ',
     unread: 0,
     local: true,
   }
@@ -101,6 +119,8 @@ function App() {
   const phoneRef = useRef(phone)
   const screenRef = useRef(screen)
   const isSystemChat = (id) => id === SYSTEM_CHAT_ID || id === 'local_system'
+  const isLocalAiChat = (id) => id === LOCAL_AI_CHAT_ID || id === 'local_ai'
+  const isLocalChat = (id) => isSystemChat(id) || isLocalAiChat(id)
 
   const AI_PROVIDERS = [
     { id: 'groq', label: 'Groq (бесплатно)', model: 'openai/gpt-oss-20b', url: 'https://console.groq.com/keys' },
@@ -309,7 +329,7 @@ function App() {
   }
 
   const loadMessages = async (chatId, p = phone) => {
-    if (!p || !chatId || isSystemChat(chatId)) return
+    if (!p || !chatId || isLocalChat(chatId)) return
     try {
       const res = await fetch(`${API_URL}/chats/messages`, {
         method: 'POST',
@@ -328,11 +348,9 @@ function App() {
     setActiveChat(d)
     setActiveMenu('chats')
     setMenuOpen(false)
-    if (isSystemChat(d.id)) {
-      setMessages(systemMessages)
-    } else {
-      loadMessages(d.id)
-    }
+    if (isSystemChat(d.id)) setMessages(systemMessages)
+    else if (isLocalAiChat(d.id)) setMessages(localAiMessages)
+    else loadMessages(d.id)
   }
 
   const pushSystemMsg = (text, isError = false) => {
@@ -364,15 +382,108 @@ function App() {
     setMessages(systemMessages)
   }
 
+  const [localAiMessages, setLocalAiMessages] = useState(() => {
+    try {
+      const raw = localStorage.getItem('tg_local_ai_chat')
+      if (raw) return JSON.parse(raw)
+    } catch (e) {}
+    return [{
+      id: 'ai_welcome',
+      text: 'Привет! Я локальный ИИ-помощник только на сайте. Спроси что угодно — ключ берётся из настроек ИИ.',
+      out: false,
+      sender: '🤖 ИИ',
+      date: '',
+      system: true,
+    }]
+  })
+
+  const openLocalAiChat = () => {
+    setActiveChat(LOCAL_AI_CHAT)
+    setActiveMenu('chats')
+    setMenuOpen(false)
+    setMessages(localAiMessages)
+  }
+
+  const finishOnboarding = () => {
+    try { localStorage.setItem('tg_onboarding_done', '1') } catch (e) {}
+    setShowOnboarding(false)
+  }
+
+  const loadTriggers = async () => {
+    if (!phone) return
+    try {
+      const res = await fetch(`${API_URL}/settings/triggers/get`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      })
+      const data = await res.json()
+      if (data.status === 'success') setTriggers(data.triggers || [])
+    } catch (e) {}
+  }
+
+  const saveTriggers = async (list) => {
+    if (!phone) return
+    try {
+      const res = await fetch(`${API_URL}/settings/triggers/set`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, triggers: list }),
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        setTriggers(data.triggers || list)
+        pushSystemMsg('Триггеры сохранены: ' + (data.triggers || list).length)
+      }
+    } catch (e) {
+      pushSystemMsg('Не удалось сохранить триггеры', true)
+    }
+  }
+
   const sendText = async () => {
     if (!text.trim() || !activeChat || !phone) return
     const payload = text.trim()
     setText('')
     const inSystem = isSystemChat(activeChat.id)
+    const inLocalAi = isLocalAiChat(activeChat.id)
 
-    // В локальном чате — только команды
-    if (inSystem && !(cmdMode || payload.startsWith('/') || true)) {
-      // always treat as command in system chat if not empty
+    // Локальный ИИ-чат
+    if (inLocalAi) {
+      const userMsg = {
+        id: 'u_' + Date.now(),
+        text: payload,
+        out: true,
+        sender: 'Вы',
+        date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+      const hist = localAiMessages.filter(m => !m.system).map(m => ({
+        role: m.out ? 'user' : 'assistant',
+        content: m.text,
+      }))
+      const next = [...localAiMessages, userMsg]
+      setLocalAiMessages(next)
+      setMessages(next)
+      try {
+        const res = await fetch(`${API_URL}/settings/ai/chat`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, message: payload, history: hist }),
+        })
+        const data = await res.json()
+        const bot = {
+          id: 'a_' + Date.now(),
+          text: data.status === 'success' ? (data.reply || '…') : ('⚠ ' + (data.message || 'Ошибка ИИ')),
+          out: false,
+          sender: '🤖 ИИ',
+          date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          error: data.status !== 'success',
+          system: data.status !== 'success',
+        }
+        const next2 = [...next, bot]
+        setLocalAiMessages(next2)
+        setMessages(next2)
+        try { localStorage.setItem('tg_local_ai_chat', JSON.stringify(next2.slice(-60))) } catch (e) {}
+      } catch (e) {
+        pushSystemMsg('Ошибка локального ИИ: ' + e.message, true)
+      }
+      return
     }
 
     if (cmdMode || payload.startsWith('/') || inSystem) {
@@ -476,22 +587,22 @@ function App() {
     if (screen === 'app' && phone) loadDialogs(phone)
   }, [screen, phone])
 
-  // когда открыт локальный чат — синхронизируем ленту с systemMessages
   useEffect(() => {
-    if (activeChat && isSystemChat(activeChat.id)) {
-      setMessages(systemMessages)
-    }
+    if (activeChat && isSystemChat(activeChat.id)) setMessages(systemMessages)
   }, [systemMessages, activeChat?.id])
+  useEffect(() => {
+    if (activeChat && isLocalAiChat(activeChat.id)) setMessages(localAiMessages)
+  }, [localAiMessages, activeChat?.id])
 
   useEffect(() => {
     if (screen !== 'app' || !phone || !activeChat) return
-    if (isSystemChat(activeChat.id)) return // локальный чат не поллим
+    if (isLocalChat(activeChat.id)) return // локальные чаты не поллим
     const chatId = activeChat.id
     const tick = () => {
       if (screenRef.current !== 'app') return
       if (!phoneRef.current) return
       if (!activeChatRef.current || activeChatRef.current.id !== chatId) return
-      if (isSystemChat(activeChatRef.current.id)) return
+      if (isLocalChat(activeChatRef.current.id)) return
       loadMessages(chatId, phoneRef.current)
     }
     const id = setInterval(tick, 2500)
@@ -643,6 +754,19 @@ function App() {
               </div>
             </div>
           </div>
+          <div
+            key={LOCAL_AI_CHAT_ID}
+            className={`dialog-item local-system local-ai ${activeChat?.id === LOCAL_AI_CHAT_ID ? 'active' : ''}`}
+            onClick={() => openLocalAiChat()}
+          >
+            <div className="dialog-avatar">🤖</div>
+            <div className="dialog-body">
+              <div className="dialog-top">
+                <span className="dialog-title">🤖 ИИ-помощник</span>
+              </div>
+              <div className="dialog-last">Локальный чат с ИИ (не в Telegram)</div>
+            </div>
+          </div>
           {dialogs.map((d) => (
             <div key={d.id} className={`dialog-item ${activeChat?.id === d.id ? 'active' : ''}`} onClick={() => openChat(d)}>
               <div className="dialog-avatar">{(d.title || '?')[0]}</div>
@@ -689,21 +813,61 @@ function App() {
               {messages.map((m) => (
                 <div
                   key={m.id}
-                  className={`bubble ${m.out ? 'out' : 'in'}${m.system ? ' system' : ''}${m.error ? ' sys-error' : ''}`}
+                  className={`bubble ${m.out ? 'out' : 'in'}${m.system ? ' system' : ''}${m.error ? ' sys-error' : ''}${explodingIds.has(m.id) ? ' explode' : ''}`}
                 >
                   {!m.out && m.sender && <div className="bubble-sender">{m.sender}</div>}
-                  <div className="bubble-text">{m.text}</div>
+                  {m.media && m.media.type === 'photo' && m.media.thumb && (
+                    <img
+                      className="bubble-photo"
+                      src={m.media.thumb}
+                      alt="фото"
+                      onClick={() => setLightbox(m.media.thumb)}
+                    />
+                  )}
+                  {m.media && m.media.type === 'photo' && !m.media.thumb && (
+                    <div className="media-card">📷 Фото</div>
+                  )}
+                  {m.media && (m.media.type === 'audio' || m.media.type === 'voice') && (
+                    <div className="media-card audio">
+                      {m.media.type === 'voice' ? '🎤 Голосовое' : '🎵'} {m.media.name || m.media.label}
+                      {m.media.duration != null && <span> · {m.media.duration}s</span>}
+                    </div>
+                  )}
+                  {m.media && m.media.type === 'video' && (
+                    <div className="media-card">🎬 {m.media.name || 'Видео'}</div>
+                  )}
+                  {m.media && m.media.type === 'file' && (
+                    <div className="media-card file">
+                      📎 {m.media.name || 'Файл'}
+                      {m.media.size ? <span> · {Math.round(m.media.size/1024)} KB</span> : null}
+                    </div>
+                  )}
+                  {m.media && m.media.type === 'webpage' && (
+                    <div className="media-card">🔗 Ссылка</div>
+                  )}
+                  {m.text && !(m.media && !m.message && m.text === (m.media.label || '')) && (
+                    <div className="bubble-text">{m.text}</div>
+                  )}
+                  {m.reactions && m.reactions.length > 0 && (
+                    <div className="bubble-reactions">
+                      {m.reactions.map((r, i) => (
+                        <span key={i} className="reaction-chip">{r.emoji} {r.count > 1 ? r.count : ''}</span>
+                      ))}
+                    </div>
+                  )}
                   <div className="bubble-time">{m.date}</div>
                 </div>
               ))}
               <div ref={messagesEndRef} />
             </div>
             <div className="composer">
-              <button type="button" className={`cmd-toggle ${cmdMode || isSystemChat(activeChat.id) ? 'on' : ''}`} title="Команды" onClick={() => setCmdMode((v) => !v)}>| / |</button>
+              <button type="button" className={`cmd-toggle ${cmdMode || isLocalChat(activeChat.id) ? 'on' : ''}`} title="Команды" onClick={() => setCmdMode((v) => !v)}>| / |</button>
               <input
                 className="composer-input"
                 placeholder={
-                  isSystemChat(activeChat.id)
+                  isLocalAiChat(activeChat.id)
+                    ? 'Спроси ИИ…'
+                    : isSystemChat(activeChat.id)
                     ? 'help | status | ai test | ai on'
                     : (cmdMode ? 'help | status | ai test | mute' : 'Сообщение...')
                 }
@@ -885,12 +1049,70 @@ function App() {
       </div>
     )
     if (activeMenu === 'custom-command') return (
-      <div className="panel"><h2>Своя команда</h2>
-        <select defaultValue="python"><option value="javascript">JS</option><option value="python">Python</option><option value="lua">Lua</option></select>
-        <textarea rows={10} placeholder="// код"></textarea>
+      <div className="panel">
+        <h2>Триггеры автоответа</h2>
+        <p className="hint">
+          Если во входящем сообщении есть фраза — бот отвечает шаблоном (до ИИ).
+          Пример: pattern <code>цена</code>, ответ <code>Пиши в личку, обсудим</code>, режим «содержит».
+        </p>
+        <label className="field-label">Фраза-триггер</label>
+        <input className="field-input" value={trigPattern} onChange={(e)=>setTrigPattern(e.target.value)} placeholder="например: прайс" />
+        <label className="field-label">Режим</label>
+        <select className="field-input" value={trigMode} onChange={(e)=>setTrigMode(e.target.value)}>
+          <option value="contains">содержит</option>
+          <option value="exact">точное совпадение</option>
+          <option value="startswith">начинается с</option>
+        </select>
+        <label className="field-label">Ответ</label>
+        <textarea className="field-input" rows={3} value={trigReply} onChange={(e)=>setTrigReply(e.target.value)} placeholder="Текст ответа" />
+        <button type="button" className="primary-btn" style={{marginTop:12}} onClick={() => {
+          if (!trigPattern.trim() || !trigReply.trim()) return
+          const next = [...triggers, {
+            id: 't' + Date.now(),
+            pattern: trigPattern.trim(),
+            reply: trigReply.trim(),
+            mode: trigMode,
+            enabled: true,
+          }]
+          setTriggers(next)
+          setTrigPattern('')
+          setTrigReply('')
+          saveTriggers(next)
+        }}>Добавить триггер</button>
+        <button type="button" className="secondary-panel-btn" onClick={loadTriggers}>Загрузить с сервера</button>
+        <ul className="cmd-list" style={{marginTop:16}}>
+          {triggers.map((t) => (
+            <li key={t.id}>
+              <code>{t.pattern}</code> ({t.mode}) → {t.reply.slice(0, 40)}
+              <button type="button" className="icon-btn" style={{marginLeft:8}} onClick={() => {
+                const next = triggers.filter(x => x.id !== t.id)
+                setTriggers(next)
+                saveTriggers(next)
+              }}>✕</button>
+            </li>
+          ))}
+          {triggers.length === 0 && <li className="hint">Пока нет триггеров</li>}
+        </ul>
       </div>
     )
-    if (activeMenu === 'tg-settings') return <div className="panel"><h2>Настройки Telegram</h2><p className="hint">Скоро</p></div>
+    if (activeMenu === 'tg-settings') return (
+      <div className="panel">
+        <h2>Настройки Telegram</h2>
+        <p className="hint">Параметры сессии и поведения клиента на сайте.</p>
+        <div className="settings-list">
+          <div className="settings-row"><span>Телефон</span><span className="settings-value">{phone || '—'}</span></div>
+          <div className="settings-row"><span>ИИ автоответ</span><span className="settings-value">{aiEnabled ? 'вкл' : 'выкл'}</span></div>
+          <div className="settings-row"><span>Провайдер ИИ</span><span className="settings-value">{aiProvider}</span></div>
+          <div className="settings-row"><span>Модель</span><span className="settings-value">{aiModel}</span></div>
+          <div className="settings-row"><span>Mute-чатов</span><span className="settings-value">{mutedIds.size}</span></div>
+          <div className="settings-row"><span>Триггеров</span><span className="settings-value">{triggers.length}</span></div>
+        </div>
+        <button type="button" className="primary-btn" style={{marginTop:12}} onClick={downloadSession}>Скачать сессию</button>
+        <button type="button" className="secondary-panel-btn" onClick={()=>{setScreen('load-session');setError('')}}>Загрузить сессию</button>
+        <button type="button" className="secondary-panel-btn" onClick={()=>{ try{localStorage.removeItem('tg_onboarding_done')}catch(e){}; setShowOnboarding(true); setOnboardStep(0) }}>Показать обучение снова</button>
+        <p className="hint" style={{marginTop:12}}>Сессия хранится на сервере Render и в localStorage. Не передавай файл session третьим лицам.</p>
+      </div>
+    )
     if (activeMenu === 'account') return (
       <div className="panel">
         <h2>Аккаунт</h2>
@@ -980,8 +1202,42 @@ function App() {
     </div></div></div>
   )
 
+  const ONBOARD_STEPS = [
+    { title: 'Добро пожаловать в TelegramCode', body: 'Это улучшенный веб-клиент твоего аккаунта Telegram: чаты, команды, mute, ИИ-автоответ.' },
+    { title: 'Локальные чаты', body: '⚡ TelegramCode — лог команд и ошибок.\n🤖 ИИ-помощник — диалог с ИИ только на сайте (в Telegram не видно).' },
+    { title: 'Команды', body: 'Кнопка | / | у поля ввода.\nmute — удалять входящие в чате\nai on / ai test — автоответ\nstatus — состояние' },
+    { title: 'ИИ и триггеры', body: 'В меню «ИИ автоответ» вставь ключ Groq.\nВ «Добавить свою команду» — триггеры: фраза → готовый ответ.' },
+  ]
+
   return (
     <div className={`app theme-${theme}`}>
+      {showOnboarding && (
+        <div className="onboard-overlay">
+          <div className="onboard-card anim-pop">
+            <h2>{ONBOARD_STEPS[onboardStep].title}</h2>
+            <p className="hint" style={{whiteSpace:'pre-wrap'}}>{ONBOARD_STEPS[onboardStep].body}</p>
+            <div style={{display:'flex', gap:8, marginTop:16}}>
+              <button type="button" className="secondary-panel-btn" onClick={finishOnboarding}>Пропустить</button>
+              {onboardStep < ONBOARD_STEPS.length - 1 ? (
+                <button type="button" className="primary-btn" onClick={()=>setOnboardStep(s=>s+1)}>Далее</button>
+              ) : (
+                <button type="button" className="primary-btn" onClick={finishOnboarding}>Готово</button>
+              )}
+            </div>
+            <div className="onboard-dots">
+              {ONBOARD_STEPS.map((_, i) => (
+                <span key={i} className={i === onboardStep ? 'dot on' : 'dot'} />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {lightbox && (
+        <div className="lightbox" onClick={()=>setLightbox(null)}>
+          <img src={lightbox} alt="preview" onClick={(e)=>e.stopPropagation()} />
+          <a className="lightbox-save" href={lightbox} download="photo.jpg" onClick={(e)=>e.stopPropagation()}>Сохранить</a>
+        </div>
+      )}
       <div className="main-layout">
         <header className="topbar">
           <button type="button" className="hamburger" onClick={()=>setMenuOpen(v=>!v)}>☰</button>
@@ -996,7 +1252,12 @@ function App() {
           <nav className="sidebar-menu">
             {menuItems.map(item=>(
               <div key={item.id} className={`menu-item ${activeMenu===item.id?'active':''}`}
-                onClick={()=>{setActiveMenu(item.id);setMenuOpen(false);if(item.id==='chats')loadDialogs();if(item.id==='ai')loadAiSettings()}}>
+                onClick={()=>{
+                  setActiveMenu(item.id); setMenuOpen(false);
+                  if(item.id==='chats') loadDialogs();
+                  if(item.id==='ai') loadAiSettings();
+                  if(item.id==='custom-command') loadTriggers();
+                }}>
                 {item.label}
               </div>
             ))}
