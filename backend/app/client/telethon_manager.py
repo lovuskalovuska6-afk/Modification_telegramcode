@@ -419,8 +419,25 @@ class TelethonManager:
             client = await self._ensure_client(phone)
             if not await client.is_user_authorized():
                 return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
-            muted_ids = {int(x) for x in (self.muted.get(phone) or set())}
+            # собираем mute по всем вариантам ключа телефона (+7 / 7 / digits)
+            muted_ids = set()
+            phone_digits = "".join(c for c in str(phone) if c.isdigit())
+            for k, s in (self.muted or {}).items():
+                kd = "".join(c for c in str(k) if c.isdigit())
+                if k == phone or kd == phone_digits:
+                    for x in s:
+                        try:
+                            muted_ids.add(int(x))
+                        except Exception:
+                            pass
             ai_on = bool((self.ai_settings.get(phone) or {}).get("enabled"))
+            if not ai_on:
+                for k, cfg in (self.ai_settings or {}).items():
+                    kd = "".join(c for c in str(k) if c.isdigit())
+                    if k == phone or kd == phone_digits:
+                        if (cfg or {}).get("enabled"):
+                            ai_on = True
+                            break
 
             def _dialog_row(d, force_archived=False):
                 entity = d.entity
@@ -744,7 +761,12 @@ class TelethonManager:
                     await self._attach_live(phone, client)
                 except Exception:
                     pass
-            return {"status": "success", "message": "Mute включён: все входящие (текст, фото, видео, стикеры…) в этом чате будут удаляться"}
+            return {
+                "status": "success",
+                "message": f"Mute включён для чата {cid}: все входящие будут удаляться",
+                "muted": True,
+                "chat_id": cid,
+            }
 
         if cmd == "unmute":
             try:
@@ -757,7 +779,12 @@ class TelethonManager:
                     save_mute_to_disk(self.sessions_dir, self.muted)
                 except Exception:
                     pass
-            return {"status": "success", "message": f"Mute выключен для чата {cid}"}
+            return {
+                "status": "success",
+                "message": f"Mute выключен для чата {cid}",
+                "muted": False,
+                "chat_id": cid,
+            }
 
         if cmd in ("help", "commands", "cmds"):
             text = (
