@@ -66,6 +66,13 @@ function App() {
   const [text, setText] = useState('')
   const [cmdMode, setCmdMode] = useState(false)
   const [chatsLoading, setChatsLoading] = useState(false)
+  const [mutedIds, setMutedIds] = useState(() => {
+    try {
+      const raw = localStorage.getItem('tg_muted_ids')
+      if (raw) return new Set(JSON.parse(raw).map(Number))
+    } catch (e) {}
+    return new Set()
+  })
   // Локальный чат только на сайте (не в Telegram)
   const SYSTEM_CHAT_ID = 'local_system'
   const SYSTEM_CHAT = {
@@ -251,6 +258,14 @@ function App() {
       const data = await res.json()
       if (data.status === 'success') {
         setDialogs((prev) => (dialogsEqual(prev, data.dialogs || []) ? prev : (data.dialogs || [])))
+        if (Array.isArray(data.muted_ids)) {
+          const s = new Set(data.muted_ids.map(Number))
+          setMutedIds(s)
+          try { localStorage.setItem('tg_muted_ids', JSON.stringify([...s])) } catch (e) {}
+        }
+        if (typeof data.ai_enabled === 'boolean') {
+          setAiEnabled(data.ai_enabled)
+        }
         setError('')
       } else if (!tried) {
         const saved = localStorage.getItem('tg_session') || ''
@@ -382,18 +397,30 @@ function App() {
           } else {
             pushSystemMsg(`Команда «${command}» выполнена`, false)
           }
+          // mute/unmute — обновляем бейджи
+          if (command === 'mute' || command === 'unmute') {
+            const cid = Number(data.chat_id != null ? data.chat_id : chatIdForCmd)
+            setMutedIds((prev) => {
+              const next = new Set(prev)
+              if (command === 'mute') next.add(cid)
+              else next.delete(cid)
+              try { localStorage.setItem('tg_muted_ids', JSON.stringify([...next])) } catch (e) {}
+              return next
+            })
+          }
+          if (command === 'ai' && (args[0] === 'on' || args[0] === 'off')) {
+            setAiEnabled(args[0] === 'on' || args[0] === 'вкл')
+          }
           // spam/reply только в реальном чате
           if (!inSystem && (data.sent || command === 'spam' || command === 'reply' || command === 'clear')) {
             await loadMessages(activeChat.id)
           }
           await loadDialogs(phone, false, true)
           if (command === 'ai') loadAiSettings(phone)
-          // всегда открываем локальный чат, чтобы пользователь увидел ответ
-          if (!inSystem) openSystemChat()
-          else setMessages((prev) => {
-            // already pushed via pushSystemMsg when in system
-            return prev
-          })
+          // для mute остаёмся в чате; для info-команд — локальный лог
+          if (!inSystem && !['mute', 'unmute', 'spam', 'reply', 'clear'].includes(command)) {
+            openSystemChat()
+          }
         } else {
           const errText = data.message || data.detail || 'Ошибка команды'
           pushSystemMsg(errText, true)
@@ -621,7 +648,10 @@ function App() {
               <div className="dialog-avatar">{(d.title || '?')[0]}</div>
               <div className="dialog-body">
                 <div className="dialog-top">
-                  <span className="dialog-title">{d.title}</span>
+                  <span className="dialog-title">
+                    {d.title}
+                    {(mutedIds.has(Number(d.id)) || d.muted) ? ' 🔇' : ''}
+                  </span>
                   {d.unread > 0 && <span className="badge">{d.unread}</span>}
                 </div>
                 <div className="dialog-last">{d.last_message || ''}</div>
@@ -639,11 +669,21 @@ function App() {
             <div className="chat-header">
               <button type="button" className="icon-btn mobile-only" onClick={() => setActiveChat(null)}>←</button>
               <span className="chat-title">{activeChat.title}</span>
-              {isSystemChat(activeChat.id) ? (
-                <span className="hint" style={{ fontSize: 11, marginLeft: 8 }}>только на сайте</span>
-              ) : (
-                <span className="live-dot" title="Автообновление">●</span>
-              )}
+              <div className="chat-header-badges">
+                {isSystemChat(activeChat.id) ? (
+                  <span className="chat-badge local">только сайт</span>
+                ) : (
+                  <>
+                    {mutedIds.has(Number(activeChat.id)) && (
+                      <span className="chat-badge mute" title="Входящие удаляются">🔇 МУТ</span>
+                    )}
+                    {aiEnabled && !activeChat.is_group && !activeChat.is_channel && (
+                      <span className="chat-badge ai" title="ИИ отвечает в личке">🤖 АВТООТВЕТ</span>
+                    )}
+                    <span className="live-dot" title="Автообновление">●</span>
+                  </>
+                )}
+              </div>
             </div>
             <div className="messages-list">
               {messages.map((m) => (
