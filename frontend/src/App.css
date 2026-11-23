@@ -296,3 +296,37 @@
 .dialog-item.local-system.active {
   background: rgba(42, 171, 238, 0.18);
 }
+
+.chat-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.chat-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.chat-badge.mute {
+  background: rgba(220, 60, 60, 0.2);
+  color: #ff8a8a;
+  border: 1px solid rgba(220, 60, 60, 0.4);
+}
+.chat-badge.ai {
+  background: rgba(42, 171, 238, 0.18);
+  color: #6ec8f5;
+  border: 1px solid rgba(42, 171, 238, 0.4);
+}
+.chat-badge.local {
+  background: rgba(150, 150, 150, 0.15);
+  color: #aaa;
+  font-size: 10px;
+}
+.dialog-item .dialog-title .mini-mute {
+  margin-left: 4px;
+  font-size: 11px;
+}
