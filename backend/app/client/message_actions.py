@@ -1,9 +1,15 @@
-"""Avatar download and message actions for TelethonManager."""
-from typing import Dict, Optional
+"""Avatar download and message actions for TelethonManager (bound as methods)."""
+from pathlib import Path
+from typing import Optional
+
 from app.client.tg_loop import on_tg_loop
 from app.config import settings
 
 MOCK = settings.is_mock
+
+
+def _phone_digits(phone: str) -> str:
+    return "".join(c for c in str(phone) if c.isdigit()) or "unknown"
 
 
 def _save_deleted_disk(self) -> None:
@@ -28,43 +34,108 @@ def _save_deleted_settings_disk(self) -> None:
 
 
 def record_deleted_message(self, phone: str, payload: dict) -> None:
-    """Called from MessageDeleted handler. Only stores if setting enabled."""
-    cfg = self.deleted_settings.get(phone) or {}
+    """Only from MessageDeleted events. Merges text from msg cache if available."""
+    cfg = (self.deleted_settings or {}).get(phone) or {}
     if not cfg.get("enabled", False):
         return
+    # enrich from in-memory cache of recently loaded messages
+    cache = getattr(self, "msg_text_cache", {}).get(phone) or {}
+    key = f"{payload.get('chat_id')}:{payload.get('id')}"
+    prev = cache.get(key) or {}
+    if prev:
+        payload = {
+            **payload,
+            "text": prev.get("text") or payload.get("text"),
+            "sender": prev.get("sender") or payload.get("sender"),
+            "date": prev.get("date") or payload.get("date"),
+            "out": prev.get("out"),
+        }
     items = self.deleted_messages.setdefault(phone, [])
+    # dedupe by chat_id+id
+    items = [x for x in items if not (x.get("id") == payload.get("id") and x.get("chat_id") == payload.get("chat_id"))]
     items.append(payload)
-    if len(items) > 200:
-        self.deleted_messages[phone] = items[-200:]
+    self.deleted_messages[phone] = items[-200:]
     self._save_deleted_disk()
+
+
+def cache_messages_for_deleted(self, phone: str, chat_id: int, messages: list) -> None:
+    """Keep recent message text so MessageDeleted can store author/text."""
+    if not hasattr(self, "msg_text_cache"):
+        self.msg_text_cache = {}
+    bucket = self.msg_text_cache.setdefault(phone, {})
+    for m in messages or []:
+        mid = m.get("id")
+        if mid is None:
+            continue
+        bucket[f"{chat_id}:{mid}"] = {
+            "text": (m.get("text") or "")[:2000],
+            "sender": m.get("sender"),
+            "date": m.get("date"),
+            "out": m.get("out"),
+        }
+    # cap cache size
+    if len(bucket) > 2000:
+        keys = list(bucket.keys())[:-1500]
+        for k in keys:
+            bucket.pop(k, None)
 
 
 @on_tg_loop
 async def get_avatar(self, phone: str, peer_id: int) -> dict:
+    """Avatar with disk cache: sessions/avatars/{phone_digits}/{peer_id}.jpg"""
     if MOCK:
         return {"status": "success", "has_photo": False, "data_base64": None, "mime": None}
     try:
+        import base64
+        from io import BytesIO
+
+        peer_id = int(peer_id)
+        digits = _phone_digits(phone)
+        cache_dir = Path(self.sessions_dir) / "avatars" / digits
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"{peer_id}.jpg"
+
+        if cache_file.exists() and cache_file.stat().st_size > 0:
+            data = cache_file.read_bytes()
+            return {
+                "status": "success",
+                "has_photo": True,
+                "data_base64": base64.b64encode(data).decode("ascii"),
+                "mime": "image/jpeg",
+                "peer_id": peer_id,
+                "cached": True,
+            }
+
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
-        import base64
-        from io import BytesIO
-        entity = await client.get_entity(int(peer_id))
+
+        entity = await client.get_entity(peer_id)
         buf = BytesIO()
         result = await client.download_profile_photo(entity, file=buf)
-        if not result:
-            return {"status": "success", "has_photo": False, "data_base64": None, "mime": "image/jpeg", "peer_id": int(peer_id)}
-        data = buf.getvalue()
+        data = buf.getvalue() if result else b""
         if not data:
-            return {"status": "success", "has_photo": False, "data_base64": None, "mime": "image/jpeg", "peer_id": int(peer_id)}
-        b64 = base64.b64encode(data).decode("ascii")
+            return {
+                "status": "success",
+                "has_photo": False,
+                "data_base64": None,
+                "mime": "image/jpeg",
+                "peer_id": peer_id,
+            }
+        # limit ~200KB for free host
+        if len(data) > 250_000:
+            data = data[:250_000]
+        try:
+            cache_file.write_bytes(data)
+        except Exception:
+            pass
         return {
             "status": "success",
             "has_photo": True,
-            "data_base64": b64,
+            "data_base64": base64.b64encode(data).decode("ascii"),
             "mime": "image/jpeg",
-            "peer_id": int(peer_id),
-            "size": len(data),
+            "peer_id": peer_id,
+            "cached": False,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -73,13 +144,18 @@ async def get_avatar(self, phone: str, peer_id: int) -> dict:
 @on_tg_loop
 async def delete_message(self, phone: str, chat_id: int, message_id: int, revoke: bool = False) -> dict:
     if MOCK:
-        return {"status": "success", "message": "Удалено (mock)", "revoke": revoke}
+        return {"status": "success", "message": "deleted", "revoke": revoke}
     try:
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
         await client.delete_messages(int(chat_id), [int(message_id)], revoke=bool(revoke))
-        return {"status": "success", "message": "Удалено", "message_id": int(message_id), "revoke": bool(revoke)}
+        return {
+            "status": "success",
+            "message": "Удалено у всех" if revoke else "Удалено у меня",
+            "message_id": int(message_id),
+            "revoke": bool(revoke),
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -87,7 +163,7 @@ async def delete_message(self, phone: str, chat_id: int, message_id: int, revoke
 @on_tg_loop
 async def edit_message(self, phone: str, chat_id: int, message_id: int, text: str) -> dict:
     if MOCK:
-        return {"status": "success", "message": {"id": message_id, "text": text, "out": True}}
+        return {"status": "success", "message": {"id": message_id, "text": text}}
     try:
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
@@ -110,17 +186,17 @@ async def edit_message(self, phone: str, chat_id: int, message_id: int, text: st
 @on_tg_loop
 async def forward_message(self, phone: str, from_chat_id: int, message_id: int, to_chat_id: int) -> dict:
     if MOCK:
-        return {"status": "success", "message": "Переслано (mock)"}
+        return {"status": "success", "message": "forwarded"}
     try:
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
-        result = await client.forward_messages(int(to_chat_id), [int(message_id)], int(from_chat_id))
-        mid = None
-        if result:
-            first = result[0] if isinstance(result, list) else result
-            mid = getattr(first, "id", None)
-        return {"status": "success", "message": "Переслано", "message_id": mid, "to_chat_id": int(to_chat_id)}
+        result = await client.forward_messages(
+            entity=int(to_chat_id),
+            messages=int(message_id),
+            from_peer=int(from_chat_id),
+        )
+        return {"status": "success", "message": "Переслано", "result_ids": [getattr(r, "id", None) for r in (result if isinstance(result, list) else [result])]}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -149,26 +225,34 @@ async def react_message(self, phone: str, chat_id: int, message_id: int, emotico
     try:
         from telethon.tl.functions.messages import SendReactionRequest
         from telethon.tl.types import ReactionEmoji
+
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
         if not emoticon:
             await client(SendReactionRequest(peer=int(chat_id), msg_id=int(message_id), reaction=[]))
             return {"status": "success", "message": "Реакция снята", "message_id": int(message_id)}
-        await client(SendReactionRequest(
-            peer=int(chat_id),
-            msg_id=int(message_id),
-            reaction=[ReactionEmoji(emoticon=emoticon)],
-        ))
-        return {"status": "success", "message": "Реакция добавлена", "message_id": int(message_id), "emoticon": emoticon}
+        await client(
+            SendReactionRequest(
+                peer=int(chat_id),
+                msg_id=int(message_id),
+                reaction=[ReactionEmoji(emoticon=emoticon)],
+            )
+        )
+        return {
+            "status": "success",
+            "message": "Реакция добавлена",
+            "message_id": int(message_id),
+            "emoticon": emoticon,
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
 @on_tg_loop
 async def get_deleted_messages(self, phone: str) -> dict:
-    items = list(self.deleted_messages.get(phone) or [])
-    cfg = self.deleted_settings.get(phone) or {"enabled": False}
+    items = list((self.deleted_messages or {}).get(phone) or [])
+    cfg = (self.deleted_settings or {}).get(phone) or {"enabled": False}
     return {
         "status": "success",
         "messages": items[-100:],
@@ -186,7 +270,7 @@ async def clear_deleted_messages(self, phone: str) -> dict:
 
 @on_tg_loop
 async def set_deleted_settings(self, phone: str, enabled: bool = None) -> dict:
-    cfg = dict(self.deleted_settings.get(phone) or {"enabled": False})
+    cfg = dict((self.deleted_settings or {}).get(phone) or {"enabled": False})
     if enabled is not None:
         cfg["enabled"] = bool(enabled)
     self.deleted_settings[phone] = cfg
