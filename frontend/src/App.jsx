@@ -22,14 +22,15 @@ const REACTIONS = ['👍', '❤️', '🔥', '😂', '😮', '😢', '👏', '�
 
 function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
   const letter = (title || '?')[0]
-  const key = peerId != null ? String(peerId) : ''
-  const url = urls[key] || (cacheRef.current.get(`${phone}:${key}`))
+  // key MUST include phone so switching accounts never shows the previous user's avatar
+  const ck = phone && peerId != null ? `${phone}:${peerId}` : ''
+  const url = ck ? (urls[ck] || cacheRef.current.get(ck) || '') : ''
   useEffect(() => {
     if (!phone || peerId == null || peerId === '' || isNaN(Number(peerId))) return
-    const ck = `${phone}:${peerId}`
-    if (cacheRef.current.has(ck)) {
-      const u = cacheRef.current.get(ck)
-      if (u && !urls[String(peerId)]) setUrls((prev) => ({ ...prev, [String(peerId)]: u }))
+    const key = `${phone}:${peerId}`
+    if (cacheRef.current.has(key)) {
+      const u = cacheRef.current.get(key)
+      if (u && !urls[key]) setUrls((prev) => ({ ...prev, [key]: u }))
       return
     }
     let cancelled = false
@@ -44,13 +45,13 @@ function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
         if (cancelled) return
         if (data.status === 'success' && data.has_photo && data.data_base64) {
           const u = `data:${data.mime || 'image/jpeg'};base64,${data.data_base64}`
-          cacheRef.current.set(ck, u)
-          setUrls((prev) => ({ ...prev, [String(peerId)]: u }))
+          cacheRef.current.set(key, u)
+          setUrls((prev) => ({ ...prev, [key]: u }))
         } else {
-          cacheRef.current.set(ck, '')
+          cacheRef.current.set(key, '')
         }
       } catch (e) {
-        cacheRef.current.set(ck, '')
+        cacheRef.current.set(key, '')
       }
     })()
     return () => { cancelled = true }
@@ -475,7 +476,24 @@ function App() {
   }
 
   const copyMsg = async (m) => {
-    try { await navigator.clipboard.writeText(m.text || '') } catch (e) {}
+    const t = m.text || ''
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(t)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = t
+        ta.style.position = 'fixed'
+        ta.style.left = '-9999px'
+        document.body.appendChild(ta)
+        ta.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        if (!ok) throw new Error('copy failed')
+      }
+    } catch (e) {
+      pushSystemMsg('Не удалось скопировать текст', true)
+    }
     closeCtx()
   }
 
@@ -597,14 +615,31 @@ function App() {
 
   const toggleSeeDeleted = async (on) => {
     if (!phone) return
-    setSeeDeleted(on)
-    await apiMsg('/chats/deleted/settings', { phone, enabled: on })
+    try {
+      const data = await apiMsg('/chats/deleted/settings', { phone, enabled: on })
+      if (data.status === 'success') {
+        setSeeDeleted(!!(data.settings && data.settings.enabled))
+      } else {
+        pushSystemMsg(data.message || 'Не удалось сохранить настройку', true)
+      }
+    } catch (e) {
+      pushSystemMsg('Сеть: настройка удалённых не сохранена', true)
+    }
   }
 
   const clearDeleted = async () => {
     if (!phone) return
-    await apiMsg('/chats/deleted/clear', { phone })
-    setDeletedList([])
+    try {
+      const data = await apiMsg('/chats/deleted/clear', { phone })
+      if (data.status === 'success') {
+        setDeletedList([])
+        pushSystemMsg(data.message || 'Список очищен')
+      } else {
+        pushSystemMsg(data.message || 'Не удалось очистить', true)
+      }
+    } catch (e) {
+      pushSystemMsg('Сеть: очистка не выполнена', true)
+    }
   }
 
 
