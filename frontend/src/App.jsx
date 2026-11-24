@@ -26,11 +26,13 @@ function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
   const ck = phone && peerId != null ? `${phone}:${peerId}` : ''
   const cached = ck ? cacheRef.current.get(ck) : undefined
   const url = ck ? (urls[ck] || (typeof cached === 'string' && cached ? cached : '') || '') : ''
-  const [retry, setRetry] = useState(0)
+  // per-key retry counts so switching chat/account gets a fresh budget of 3
+  const retryMapRef = useRef({})
+  const [retryTick, setRetryTick] = useState(0)
   useEffect(() => {
     if (!phone || peerId == null || peerId === '' || isNaN(Number(peerId))) return
     const key = `${phone}:${peerId}`
-    // cached string (incl. '' = confirmed no photo) → do not refetch
+    // cached string (incl. '' = confirmed no photo) → do not refetch, no retries
     if (cacheRef.current.has(key)) {
       const u = cacheRef.current.get(key)
       if (u && !urls[key]) setUrls((prev) => ({ ...prev, [key]: u }))
@@ -53,15 +55,20 @@ function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
           const u = `data:${data.mime || 'image/jpeg'};base64,${data.data_base64}`
           cacheRef.current.set(key, u)
           setUrls((prev) => ({ ...prev, [key]: u }))
+          retryMapRef.current[key] = 0
         } else if (data.status === 'success') {
-          // confirmed: no photo — cache empty string so we do not loop
+          // confirmed: no photo — cache empty; no further retries for this key
           cacheRef.current.set(key, '')
+          retryMapRef.current[key] = 0
         }
-        // non-success without throw: do not cache, allow later retry
       } catch (e) {
-        // network / parse error — do NOT cache empty; retry a few times
-        if (!cancelled && retry < 3) {
-          retryTimer = setTimeout(() => setRetry((n) => n + 1), 2000)
+        // network / parse error — do NOT cache; retry up to 3 times per key, 2s apart
+        const n = retryMapRef.current[key] || 0
+        if (!cancelled && n < 3) {
+          retryMapRef.current[key] = n + 1
+          retryTimer = setTimeout(() => {
+            if (!cancelled) setRetryTick((t) => t + 1)
+          }, 2000)
         }
       }
     })()
@@ -69,7 +76,7 @@ function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
       cancelled = true
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [phone, peerId, retry])
+  }, [phone, peerId, retryTick])
   if (url) {
     return <img className="avatar-img" src={url} alt="" style={{ width: size, height: size }} />
   }
