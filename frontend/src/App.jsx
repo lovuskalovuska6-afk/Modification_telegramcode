@@ -966,8 +966,12 @@ function App() {
         if (data.status === 'success') {
           setMessages((prev) => prev.map((m) => (m.id === editMsg.id ? { ...m, text: payload } : m)))
           setEditMsg(null)
-        } else setError(data.message || 'Не удалось изменить')
+        } else {
+          setText(payload)
+          setError(data.message || 'Не удалось изменить')
+        }
       } catch (e) {
+        setText(payload)
         setError('Ошибка редактирования')
       }
       return
@@ -992,8 +996,12 @@ function App() {
         })
         setReplyTo(null)
         loadDialogs(phone, false, true)
-      } else setError(typeof data.message === 'string' ? data.message : 'Не отправлено')
+      } else {
+        setText(payload)
+        setError(typeof data.message === 'string' ? data.message : 'Не отправлено')
+      }
     } catch (e) {
+      setText(payload)
       setError('Ошибка отправки')
     }
   }
@@ -1304,15 +1312,20 @@ function App() {
                   onTouchMove={onBubbleTouchEnd}
                   onDoubleClick={() => !m.system && !isLocalChat(activeChat.id) && doReact(m, '👍')}
                 >
-                  {m.reply_to && (
+                  {m.reply_to && (() => {
+                    const local = messages.find((x) => x.id === m.reply_to.id)
+                    const qText = m.reply_to.text || local?.text || ('#' + m.reply_to.id)
+                    const qSender = m.reply_to.sender || local?.sender || 'Сообщение'
+                    return (
                     <div className="reply-quote" onClick={() => {
                       const el = document.getElementById('msg-' + m.reply_to.id)
                       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
                     }}>
-                      <div className="reply-quote-sender">{m.reply_to.sender || 'Сообщение'}</div>
-                      <div className="reply-quote-text">{(m.reply_to.text || ('#' + m.reply_to.id)).slice(0, 80)}</div>
+                      <div className="reply-quote-sender">{qSender}</div>
+                      <div className="reply-quote-text">{String(qText).slice(0, 80)}</div>
                     </div>
-                  )}
+                    )
+                  })()}
                   {!m.out && m.sender && (
                     <div className="bubble-sender">
                       {m.sender_username ? (
