@@ -99,6 +99,20 @@ class TelethonManager:
             except Exception:
                 self.triggers = {}
         self._handlers_ready: set = set()
+        # deleted-messages store (only via MessageDeleted events)
+        self.deleted_messages: Dict[str, list] = {}
+        self.deleted_settings: Dict[str, dict] = {}
+        self.msg_text_cache: Dict[str, dict] = {}
+        try:
+            import json as _json
+            dp = self.sessions_dir / "deleted_messages.json"
+            if dp.exists():
+                self.deleted_messages = _json.loads(dp.read_text(encoding="utf-8")) or {}
+            sp = self.sessions_dir / "deleted_settings.json"
+            if sp.exists():
+                self.deleted_settings = _json.loads(sp.read_text(encoding="utf-8")) or {}
+        except Exception:
+            pass
 
     def _session_path(self, phone: str) -> Path:
         clean = "".join(c for c in phone if c.isdigit())
@@ -523,7 +537,15 @@ class TelethonManager:
                             reactions.append({"emoji": emo, "count": int(getattr(r, "count", 1) or 1)})
                 except Exception:
                     pass
-                result.append({
+                reply_to = None
+                try:
+                    rto = getattr(m, "reply_to", None)
+                    rid = getattr(rto, "reply_to_msg_id", None) if rto else None
+                    if rid:
+                        reply_to = {"id": int(rid)}
+                except Exception:
+                    reply_to = None
+                row = {
                     "id": m.id,
                     "text": text,
                     "out": bool(m.out),
@@ -532,7 +554,13 @@ class TelethonManager:
                     "sender_username": sender_username,
                     "media": media_info,
                     "reactions": reactions,
-                })
+                    "reply_to": reply_to,
+                }
+                result.append(row)
+            try:
+                self.cache_messages_for_deleted(phone, int(chat_id), result)
+            except Exception:
+                pass
             return {"status": "success", "messages": result, "me_id": me.id}
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -681,11 +709,13 @@ class TelethonManager:
             return {"status": "error", "message": str(e)}
 
     @on_tg_loop
-    async def send_message(self, phone: str, chat_id: int, text: str) -> dict:
+    async def send_message(self, phone: str, chat_id: int, text: str, reply_to: int = None) -> dict:
         if MOCK:
             self._init_mock_chats(phone)
             msgs = self.mock_messages.setdefault(phone, {}).setdefault(chat_id, [])
             msg = {"id": len(msgs) + 1, "text": text, "out": True, "date": "сейчас", "sender": "You"}
+            if reply_to:
+                msg["reply_to"] = {"id": int(reply_to), "text": "", "sender": ""}
             msgs.append(msg)
             for d in self.mock_dialogs.get(phone, []):
                 if d["id"] == chat_id:
@@ -695,17 +725,20 @@ class TelethonManager:
             client = await self._ensure_client(phone)
             if not await client.is_user_authorized():
                 return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
-            m = await client.send_message(chat_id, text)
-            return {
-                "status": "success",
-                "message": {
-                    "id": m.id,
-                    "text": m.message or text,
-                    "out": True,
-                    "date": m.date.strftime("%H:%M") if m.date else "",
-                    "sender": "Вы",
-                },
+            kwargs = {}
+            if reply_to:
+                kwargs["reply_to"] = int(reply_to)
+            m = await client.send_message(chat_id, text, **kwargs)
+            out = {
+                "id": m.id,
+                "text": m.message or text,
+                "out": True,
+                "date": m.date.strftime("%H:%M") if m.date else "",
+                "sender": "Вы",
             }
+            if reply_to:
+                out["reply_to"] = {"id": int(reply_to)}
+            return {"status": "success", "message": out}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -1037,6 +1070,27 @@ class TelethonManager:
             return {"status": "error", "message": err}
         return {"status": "success", "reply": reply}
 
+
+
+
+# Bind message actions (avatar, delete, edit, forward, pin, react, deleted store)
+try:
+    from app.client import message_actions as _ma
+    TelethonManager._save_deleted_disk = _ma._save_deleted_disk
+    TelethonManager._save_deleted_settings_disk = _ma._save_deleted_settings_disk
+    TelethonManager.record_deleted_message = _ma.record_deleted_message
+    TelethonManager.cache_messages_for_deleted = _ma.cache_messages_for_deleted
+    TelethonManager.get_avatar = _ma.get_avatar
+    TelethonManager.delete_message = _ma.delete_message
+    TelethonManager.edit_message = _ma.edit_message
+    TelethonManager.forward_message = _ma.forward_message
+    TelethonManager.pin_message = _ma.pin_message
+    TelethonManager.react_message = _ma.react_message
+    TelethonManager.get_deleted_messages = _ma.get_deleted_messages
+    TelethonManager.clear_deleted_messages = _ma.clear_deleted_messages
+    TelethonManager.set_deleted_settings = _ma.set_deleted_settings
+except Exception:
+    pass
 
 
 

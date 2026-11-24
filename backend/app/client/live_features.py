@@ -177,6 +177,28 @@ async def attach_handlers(manager, phone: str, client) -> None:
             except Exception:
                 pass
 
+    @client.on(events.MessageDeleted)
+    async def _on_deleted(event, _phone=phone):
+        """Real Telegram MessageDeleted only — never invent deletions from missing history.
+        In some private chats event.chat_id may be None (Telegram/Telethon limit).
+        """
+        try:
+            cfg = getattr(manager, "deleted_settings", {}).get(_phone) or {}
+            if not cfg.get("enabled"):
+                return
+            chat_id = getattr(event, "chat_id", None)
+            for mid in (event.deleted_ids or []):
+                payload = {
+                    "id": int(mid),
+                    "chat_id": int(chat_id) if chat_id is not None else None,
+                    "deleted_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+                    "source": "MessageDeleted",
+                }
+                if hasattr(manager, "record_deleted_message"):
+                    manager.record_deleted_message(_phone, payload)
+        except Exception:
+            pass
+
     client._tc_incoming_handler = True
     if not hasattr(manager, "_handlers_ready"):
         manager._handlers_ready = set()
