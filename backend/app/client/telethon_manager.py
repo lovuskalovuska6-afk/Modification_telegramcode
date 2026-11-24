@@ -557,6 +557,16 @@ class TelethonManager:
                     "reply_to": reply_to,
                 }
                 result.append(row)
+            # fill reply quote text/sender from messages in this page when possible
+            by_id = {row["id"]: row for row in result if row.get("id") is not None}
+            for row in result:
+                rto = row.get("reply_to")
+                if not rto or not rto.get("id"):
+                    continue
+                src = by_id.get(rto["id"])
+                if src:
+                    rto["text"] = (src.get("text") or "")[:120]
+                    rto["sender"] = src.get("sender") or ""
             try:
                 self.cache_messages_for_deleted(phone, int(chat_id), result)
             except Exception:
