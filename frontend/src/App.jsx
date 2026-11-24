@@ -24,16 +24,20 @@ function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
   const letter = (title || '?')[0]
   // key MUST include phone so switching accounts never shows the previous user's avatar
   const ck = phone && peerId != null ? `${phone}:${peerId}` : ''
-  const url = ck ? (urls[ck] || cacheRef.current.get(ck) || '') : ''
+  const cached = ck ? cacheRef.current.get(ck) : undefined
+  const url = ck ? (urls[ck] || (typeof cached === 'string' && cached ? cached : '') || '') : ''
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
     if (!phone || peerId == null || peerId === '' || isNaN(Number(peerId))) return
     const key = `${phone}:${peerId}`
+    // cached string (incl. '' = confirmed no photo) → do not refetch
     if (cacheRef.current.has(key)) {
       const u = cacheRef.current.get(key)
       if (u && !urls[key]) setUrls((prev) => ({ ...prev, [key]: u }))
       return
     }
     let cancelled = false
+    let retryTimer = null
     ;(async () => {
       try {
         const res = await fetch(`${API_URL}/chats/avatar`, {
@@ -41,21 +45,31 @@ function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phone, peer_id: Number(peerId) }),
         })
+        if (cancelled) return
+        if (!res.ok) throw new Error('http ' + res.status)
         const data = await res.json()
         if (cancelled) return
         if (data.status === 'success' && data.has_photo && data.data_base64) {
           const u = `data:${data.mime || 'image/jpeg'};base64,${data.data_base64}`
           cacheRef.current.set(key, u)
           setUrls((prev) => ({ ...prev, [key]: u }))
-        } else {
+        } else if (data.status === 'success') {
+          // confirmed: no photo — cache empty string so we do not loop
           cacheRef.current.set(key, '')
         }
+        // non-success without throw: do not cache, allow later retry
       } catch (e) {
-        cacheRef.current.set(key, '')
+        // network / parse error — do NOT cache empty; retry a few times
+        if (!cancelled && retry < 3) {
+          retryTimer = setTimeout(() => setRetry((n) => n + 1), 2000)
+        }
       }
     })()
-    return () => { cancelled = true }
-  }, [phone, peerId])
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }, [phone, peerId, retry])
   if (url) {
     return <img className="avatar-img" src={url} alt="" style={{ width: size, height: size }} />
   }
@@ -131,6 +145,7 @@ function App() {
   const [seeDeleted, setSeeDeleted] = useState(false)
   const [deletedList, setDeletedList] = useState([])
   const longPressRef = useRef(null)
+  const deletedLoadReq = useRef(0)
   const [showOnboarding, setShowOnboarding] = useState(() => {
     try { return localStorage.getItem('tg_onboarding_done') !== '1' } catch (e) { return true }
   })
@@ -593,19 +608,29 @@ function App() {
   }
 
   const onBubbleTouchStart = (e, m) => {
-    longPressRef.current = setTimeout(() => {
-      const t = e.touches?.[0]
-      setCtxMenu({ x: t?.clientX || 40, y: t?.clientY || 80, msg: m })
+    // capture coords NOW — touches is empty inside setTimeout after finger lifts
+    const t = e.touches?.[0] || e.changedTouches?.[0]
+    const x = t?.clientX ?? 40
+    const y = t?.clientY ?? 80
+    if (longPressRef.current?.timer) clearTimeout(longPressRef.current.timer)
+    const timer = setTimeout(() => {
+      setCtxMenu({ x, y, msg: m })
+      longPressRef.current = null
     }, 450)
+    longPressRef.current = { timer, x, y }
   }
   const onBubbleTouchEnd = () => {
-    if (longPressRef.current) clearTimeout(longPressRef.current)
+    if (longPressRef.current?.timer) clearTimeout(longPressRef.current.timer)
+    longPressRef.current = null
   }
 
   const loadDeletedSettings = async () => {
     if (!phone) return
+    const req = ++deletedLoadReq.current
     try {
       const data = await apiMsg('/chats/deleted/get', { phone })
+      // ignore stale response (e.g. user already toggled)
+      if (req !== deletedLoadReq.current) return
       if (data.status === 'success') {
         setSeeDeleted(!!data.enabled)
         setDeletedList(data.messages || [])
@@ -615,8 +640,11 @@ function App() {
 
   const toggleSeeDeleted = async (on) => {
     if (!phone) return
+    // invalidate in-flight loadDeletedSettings so it cannot overwrite this toggle
+    const req = ++deletedLoadReq.current
     try {
       const data = await apiMsg('/chats/deleted/settings', { phone, enabled: on })
+      if (req !== deletedLoadReq.current) return
       if (data.status === 'success') {
         setSeeDeleted(!!(data.settings && data.settings.enabled))
       } else {
@@ -1687,7 +1715,7 @@ function App() {
           <div className="settings-row">
             <span>Видеть удалённые сообщения</span>
             <label className="switch">
-              <input type="checkbox" checked={seeDeleted} onChange={(e) => toggleSeeDeleted(e.target.checked)} onClick={() => loadDeletedSettings()} />
+              <input type="checkbox" checked={seeDeleted} onChange={(e) => toggleSeeDeleted(e.target.checked)} />
             </label>
           </div>
           <p className="hint">Сохраняются только сообщения, которые уже были получены, при реальном событии удаления Telegram.</p>
@@ -1891,6 +1919,7 @@ function App() {
                   if(item.id==='chats') loadDialogs();
                   if(item.id==='ai') loadAiSettings();
                   if(item.id==='custom-command') loadTriggers();
+                  if(item.id==='tg-settings') loadDeletedSettings();
                 }}>
                 {item.label}
               </div>
