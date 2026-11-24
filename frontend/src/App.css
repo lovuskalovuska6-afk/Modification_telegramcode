@@ -635,3 +635,101 @@
   justify-content: center;
   min-height: 100%;
 }
+
+.avatar-img {
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #2b5278;
+}
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(0,0,0,0.25);
+}
+.ctx-menu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--sidebar, #17212b);
+  border: 1px solid var(--border, #333);
+  border-radius: 12px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.ctx-menu button {
+  background: transparent;
+  border: none;
+  color: var(--text, #fff);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.ctx-menu button:hover { background: rgba(42,171,238,0.15); }
+.react-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+  background: var(--sidebar, #17212b);
+  border-radius: 16px;
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border, #333);
+  max-width: 90vw;
+}
+.react-btn {
+  font-size: 22px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+}
+.reply-quote {
+  border-left: 3px solid #2aabee;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  background: rgba(42,171,238,0.08);
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+.reply-quote-sender { font-weight: 600; color: #2aabee; }
+.reply-quote-text { opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer-extra { padding: 0 8px; }
+.reply-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(42,171,238,0.1);
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.reply-bar-text {
+  flex: 1;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.forward-box { max-height: 70vh; overflow: auto; }
+.forward-list { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; max-height: 40vh; overflow: auto; }
+.forward-item {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #333);
+  background: transparent;
+  color: var(--text, #fff);
+  cursor: pointer;
+}
+.forward-item:hover { background: rgba(42,171,238,0.12); }
