@@ -488,7 +488,7 @@ class TelethonManager:
             return {"status": "error", "message": str(e)}
 
     @on_tg_loop
-    async def get_messages(self, phone: str, chat_id: int, limit: int = 40) -> dict:
+    async def get_messages(self, phone: str, chat_id: int, limit: int = 25) -> dict:
         if MOCK:
             self._init_mock_chats(phone)
             msgs = list(reversed(self.mock_messages.get(phone, {}).get(chat_id, [])))
@@ -508,9 +508,11 @@ class TelethonManager:
                     if not text:
                         text = (media_info or {}).get("label") or "[медиа]"
                 sender_name = ""
+                sender_username = None
                 try:
                     if m.sender:
                         sender_name = getattr(m.sender, "first_name", None) or getattr(m.sender, "title", None) or ""
+                        sender_username = getattr(m.sender, "username", None) or None
                 except Exception:
                     pass
                 reactions = []
@@ -527,6 +529,7 @@ class TelethonManager:
                     "out": bool(m.out),
                     "date": m.date.strftime("%H:%M") if m.date else "",
                     "sender": sender_name or ("Вы" if m.out else ""),
+                    "sender_username": sender_username,
                     "media": media_info,
                     "reactions": reactions,
                 })
