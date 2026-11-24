@@ -14,7 +14,7 @@ class PhoneBody(BaseModel):
 class MessagesBody(BaseModel):
     phone: str
     chat_id: int
-    limit: int = 40
+    limit: int = 25
 
 
 class SendBody(BaseModel):
@@ -48,7 +48,7 @@ async def dialogs(data: PhoneBody):
 async def messages(data: MessagesBody):
     try:
         return await telethon_manager.get_messages(
-            data.phone.strip(), data.chat_id, limit=min(data.limit, 100)
+            data.phone.strip(), data.chat_id, limit=min(max(1, data.limit), 40)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
