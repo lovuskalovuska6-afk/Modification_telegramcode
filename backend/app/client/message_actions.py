@@ -12,6 +12,11 @@ def _phone_digits(phone: str) -> str:
     return "".join(c for c in str(phone) if c.isdigit()) or "unknown"
 
 
+async def _peer(client, chat_id):
+    """Resolve Telegram peer; raw int often fails for channels/supergroups."""
+    return await client.get_input_entity(int(chat_id))
+
+
 def _save_deleted_disk(self) -> None:
     try:
         import json as _json
@@ -195,7 +200,8 @@ async def delete_message(self, phone: str, chat_id: int, message_id: int, revoke
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
-        await client.delete_messages(int(chat_id), [int(message_id)], revoke=bool(revoke))
+        peer = await _peer(client, chat_id)
+        await client.delete_messages(peer, [int(message_id)], revoke=bool(revoke))
         return {
             "status": "success",
             "message": "Удалено у всех" if revoke else "Удалено у меня",
@@ -214,7 +220,8 @@ async def edit_message(self, phone: str, chat_id: int, message_id: int, text: st
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
-        m = await client.edit_message(int(chat_id), int(message_id), text)
+        peer = await _peer(client, chat_id)
+        m = await client.edit_message(peer, int(message_id), text)
         return {
             "status": "success",
             "message": {
@@ -237,10 +244,12 @@ async def forward_message(self, phone: str, from_chat_id: int, message_id: int, 
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
+        to_peer = await _peer(client, to_chat_id)
+        from_peer = await _peer(client, from_chat_id)
         result = await client.forward_messages(
-            entity=int(to_chat_id),
+            entity=to_peer,
             messages=int(message_id),
-            from_peer=int(from_chat_id),
+            from_peer=from_peer,
         )
         return {"status": "success", "message": "Переслано", "result_ids": [getattr(r, "id", None) for r in (result if isinstance(result, list) else [result])]}
     except Exception as e:
@@ -255,10 +264,11 @@ async def pin_message(self, phone: str, chat_id: int, message_id: int, unpin: bo
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
+        peer = await _peer(client, chat_id)
         if unpin:
-            await client.unpin_message(int(chat_id), int(message_id))
+            await client.unpin_message(peer, int(message_id))
             return {"status": "success", "message": "Откреплено", "message_id": int(message_id)}
-        await client.pin_message(int(chat_id), int(message_id))
+        await client.pin_message(peer, int(message_id))
         return {"status": "success", "message": "Закреплено", "message_id": int(message_id)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -275,12 +285,13 @@ async def react_message(self, phone: str, chat_id: int, message_id: int, emotico
         client = await self._ensure_client(phone)
         if not await client.is_user_authorized():
             return {"status": "error", "message": "Сессия не найдена. Загрузите файл сессии вручную."}
+        peer = await _peer(client, chat_id)
         if not emoticon:
-            await client(SendReactionRequest(peer=int(chat_id), msg_id=int(message_id), reaction=[]))
+            await client(SendReactionRequest(peer=peer, msg_id=int(message_id), reaction=[]))
             return {"status": "success", "message": "Реакция снята", "message_id": int(message_id)}
         await client(
             SendReactionRequest(
-                peer=int(chat_id),
+                peer=peer,
                 msg_id=int(message_id),
                 reaction=[ReactionEmoji(emoticon=emoticon)],
             )
