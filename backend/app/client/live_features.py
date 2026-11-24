@@ -67,6 +67,7 @@ def load_ai_from_disk(sessions_dir: Path) -> Dict[str, dict]:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                # нормализуем
                 out = {}
                 for phone, cfg in data.items():
                     if isinstance(cfg, dict):
@@ -84,6 +85,7 @@ def save_ai_to_disk(sessions_dir: Path, ai_settings: Dict[str, dict]) -> None:
     path = _ai_disk_path(sessions_dir)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # не храним last_error на диске как постоянное — но можно
         clean = {}
         for phone, cfg in (ai_settings or {}).items():
             if not isinstance(cfg, dict):
@@ -158,7 +160,7 @@ def load_mute_from_disk(sessions_dir: Path) -> Dict[str, set]:
 
 
 async def attach_handlers(manager, phone: str, client) -> None:
-    """Вешаем хендлеры на client. После reconnect клиент новый — флаг на объекте сбросится."""
+    """Вешаем хендлер на client. После reconnect клиент новый — флаг на объекте сбросится."""
     if client is None:
         return
     if getattr(client, "_tc_incoming_handler", False):
@@ -177,17 +179,14 @@ async def attach_handlers(manager, phone: str, client) -> None:
 
     @client.on(events.MessageDeleted)
     async def _on_deleted(event, _phone=phone):
-        """Реальное событие удаления из Telegram — не путать с отсутствием в истории.
-
-        В части личных чатов event.chat_id может быть None (ограничение Telegram/Telethon).
-        Тогда chat_id=null и запись помечается chat_id_uncertain на стороне record_deleted_message.
+        """Real Telegram MessageDeleted only — never invent deletions from missing history.
+        In some private chats event.chat_id may be None (Telegram/Telethon limit).
         """
         try:
             cfg = getattr(manager, "deleted_settings", {}).get(_phone) or {}
             if not cfg.get("enabled"):
                 return
             chat_id = getattr(event, "chat_id", None)
-            # some builds expose peer via deleted_ids only; do not invent chat_id
             for mid in (event.deleted_ids or []):
                 payload = {
                     "id": int(mid),
@@ -233,6 +232,7 @@ async def handle_incoming(manager, phone: str, event) -> None:
     except Exception:
         is_private = False
     if not is_private and chat_id > 0:
+        # user peer id положительный — считаем личкой
         is_private = True
     if not is_private:
         return
@@ -354,6 +354,7 @@ async def ai_generate(
         except Exception:
             pass
 
+    # личность аккаунта
     me = me_info or {}
     name_parts = [me.get("first_name") or "", me.get("last_name") or ""]
     display_name = " ".join(p for p in name_parts if p).strip() or "владелец аккаунта"
@@ -499,39 +500,50 @@ async def run_extra_command(manager, phone, chat_id, cmd, args, MOCK, send_messa
             f"ИИ={'вкл' if ai.get('enabled') else 'выкл'}\n"
             f"provider={ai.get('provider') or '-'}\n"
             f"model={ai.get('model') or '-'}\n"
-            f"ключ={key_ok}\n"
-            f"last_error={err or 'нет'}"
+            f"ключ={'есть' if key else 'НЕТ'}"
         )
+        if err:
+            msg += f"\n\n⚠ Последняя ошибка ИИ:\n{err}"
         return {"status": "success", "message": msg}
 
     if cmd == "id":
         return {"status": "success", "message": f"chat_id={chat_id}"}
 
     if cmd == "ping":
-        return {"status": "success", "message": "pong"}
+        return {"status": "success", "message": "pong ✓"}
 
-    if cmd == "me":
-        try:
-            info = await get_me(phone)
-            if info.get("status") == "success" and info.get("user"):
-                u = info["user"]
-                return {
-                    "status": "success",
-                    "message": f"{u.get('first_name') or ''} {u.get('last_name') or ''} id={u.get('id')} @{u.get('username') or '-'}".strip(),
-                }
-            return {"status": "error", "message": info.get("message") or "не удалось"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+    if cmd in ("me", "whoami"):
+        me = await get_me(phone)
+        if me.get("status") != "success":
+            return me
+        u = me.get("user") or {}
+        return {
+            "status": "success",
+            "message": f"{u.get('first_name') or ''} @{u.get('username') or '—'} id={u.get('id')}",
+        }
 
     if cmd == "ai":
-        sub = (args[0] if args else "").lower()
-        if sub in ("on", "off"):
-            enabled = sub == "on"
-            cfg = default_ai()
-            cfg.update(getattr(manager, "ai_settings", {}).get(phone) or {})
-            cfg["enabled"] = enabled
-            if not hasattr(manager, "ai_settings"):
-                manager.ai_settings = {}
+        mode = (args[0] if args else "").lower()
+        if not hasattr(manager, "ai_settings"):
+            manager.ai_settings = {}
+        cfg = default_ai()
+        cfg.update(manager.ai_settings.get(phone) or {})
+
+        # ai test — реальный запрос к модели, результат в чат
+        if mode == "test":
+            prompt = " ".join(args[1:]).strip() or "Скажи коротко: привет, я работаю"
+            reply, err = await ai_generate(manager, phone, prompt)
+            if err:
+                set_last_error(manager, phone, err)
+                return {"status": "error", "message": f"ИИ ошибка:\n{err}"}
+            set_last_error(manager, phone, "")
+            return {
+                "status": "success",
+                "message": f"ИИ ответ:\n{reply}",
+            }
+
+        if mode in ("on", "1", "true", "вкл"):
+            cfg["enabled"] = True
             manager.ai_settings[phone] = cfg
             try:
                 sd = getattr(manager, "sessions_dir", None)
@@ -539,45 +551,35 @@ async def run_extra_command(manager, phone, chat_id, cmd, args, MOCK, send_messa
                     save_ai_to_disk(sd, manager.ai_settings)
             except Exception:
                 pass
-            return {"status": "success", "message": f"ИИ автоответ {'включён' if enabled else 'выключен'}"}
-        if sub == "test":
-            reply, err = await ai_generate(manager, phone, "Привет, это тест. Ответь одним коротким предложением.")
-            if err:
-                set_last_error(manager, phone, err)
-                return {"status": "error", "message": err}
-            return {"status": "success", "message": f"ИИ ответ: {reply}"}
-        return {"status": "error", "message": "ai on|off|test"}
+            return {"status": "success", "message": "ИИ автоответ включён (только личные сообщения)"}
+        if mode in ("off", "0", "false", "выкл"):
+            cfg["enabled"] = False
+            manager.ai_settings[phone] = cfg
+            try:
+                sd = getattr(manager, "sessions_dir", None)
+                if sd:
+                    save_ai_to_disk(sd, manager.ai_settings)
+            except Exception:
+                pass
+            return {"status": "success", "message": "ИИ автоответ выключен"}
+        return {
+            "status": "success",
+            "message": (
+                f"ИИ сейчас: {'вкл' if cfg.get('enabled') else 'выкл'}\n"
+                f"provider={cfg.get('provider')} model={cfg.get('model')}\n"
+                "Команды: ai on | ai off | ai test"
+            ),
+        }
 
     if cmd == "reply":
         text = " ".join(args).strip()
         if not text:
-            return {"status": "error", "message": "reply текст"}
+            return {"status": "error", "message": "Укажи текст: reply привет"}
         return await send_message(phone, chat_id, text)
 
     if cmd == "info":
-        return {"status": "success", "message": f"chat_id={chat_id} phone={phone}"}
-
-    if cmd == "clear":
-        try:
-            n = int(args[0]) if args else 5
-        except Exception:
-            n = 5
-        n = max(1, min(n, 20))
-        return {"status": "error", "message": f"clear {n}: используй меню сообщения для удаления"}
-
-    if cmd == "spam":
-        if len(args) < 2:
-            return {"status": "error", "message": "spam слово N"}
-        word = args[0]
-        try:
-            n = int(args[1])
-        except Exception:
-            n = 1
-        n = max(1, min(n, 20))
-        last = None
-        for _ in range(n):
-            last = await send_message(phone, chat_id, word)
-        return last or {"status": "success", "message": f"spam x{n}"}
+        is_muted = chat_id in (manager.muted.get(phone) or set())
+        return {"status": "success", "message": f"chat_id={chat_id}; muted={'да' if is_muted else 'нет'}"}
 
     return None
 
