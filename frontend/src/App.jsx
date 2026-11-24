@@ -17,6 +17,54 @@ function msgsEqual(a, b) {
   return true
 }
 
+
+const REACTIONS = ['👍', '❤️', '🔥', '😂', '😮', '😢', '👏', '🎉']
+
+function Avatar({ peerId, title, phone, size = 40, cacheRef, urls, setUrls }) {
+  const letter = (title || '?')[0]
+  const key = peerId != null ? String(peerId) : ''
+  const url = urls[key] || (cacheRef.current.get(`${phone}:${key}`))
+  useEffect(() => {
+    if (!phone || peerId == null || peerId === '' || isNaN(Number(peerId))) return
+    const ck = `${phone}:${peerId}`
+    if (cacheRef.current.has(ck)) {
+      const u = cacheRef.current.get(ck)
+      if (u && !urls[String(peerId)]) setUrls((prev) => ({ ...prev, [String(peerId)]: u }))
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_URL}/chats/avatar`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, peer_id: Number(peerId) }),
+        })
+        const data = await res.json()
+        if (cancelled) return
+        if (data.status === 'success' && data.has_photo && data.data_base64) {
+          const u = `data:${data.mime || 'image/jpeg'};base64,${data.data_base64}`
+          cacheRef.current.set(ck, u)
+          setUrls((prev) => ({ ...prev, [String(peerId)]: u }))
+        } else {
+          cacheRef.current.set(ck, '')
+        }
+      } catch (e) {
+        cacheRef.current.set(ck, '')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [phone, peerId])
+  if (url) {
+    return <img className="avatar-img" src={url} alt="" style={{ width: size, height: size }} />
+  }
+  return (
+    <div className="dialog-avatar" style={{ width: size, height: size, fontSize: size * 0.4 }}>
+      {letter}
+    </div>
+  )
+}
+
 function dialogsEqual(a, b) {
   if (a === b) return true
   if (!a || !b || a.length !== b.length) return false
@@ -72,6 +120,16 @@ function App() {
   const [donateOpen, setDonateOpen] = useState(false)
   const [msgsError, setMsgsError] = useState('')
   const msgCacheRef = useRef(new Map()) // chatId -> messages[]
+  const avatarCacheRef = useRef(new Map()) // `${phone}:${peerId}` -> dataUrl
+  const [avatarUrls, setAvatarUrls] = useState({}) // peerId -> url for re-render
+  const [ctxMenu, setCtxMenu] = useState(null) // {x,y,msg}
+  const [replyTo, setReplyTo] = useState(null) // {id, text, sender}
+  const [editMsg, setEditMsg] = useState(null) // {id, text}
+  const [forwardMsg, setForwardMsg] = useState(null) // message
+  const [reactMsg, setReactMsg] = useState(null)
+  const [seeDeleted, setSeeDeleted] = useState(false)
+  const [deletedList, setDeletedList] = useState([])
+  const longPressRef = useRef(null)
   const [showOnboarding, setShowOnboarding] = useState(() => {
     try { return localStorage.getItem('tg_onboarding_done') !== '1' } catch (e) { return true }
   })
@@ -405,6 +463,151 @@ function App() {
     a.click()
   }
 
+  const closeCtx = () => setCtxMenu(null)
+
+  const apiMsg = async (path, body) => {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return res.json()
+  }
+
+  const copyMsg = async (m) => {
+    try { await navigator.clipboard.writeText(m.text || '') } catch (e) {}
+    closeCtx()
+  }
+
+  const startReply = (m) => {
+    setEditMsg(null)
+    setReplyTo({ id: m.id, text: (m.text || '').slice(0, 120), sender: m.sender || '' })
+    closeCtx()
+  }
+
+  const startEdit = (m) => {
+    if (!m.out) return
+    setReplyTo(null)
+    setEditMsg({ id: m.id, text: m.text || '' })
+    setText(m.text || '')
+    closeCtx()
+  }
+
+  const doDelete = async (m, revoke) => {
+    if (!phone || !activeChat) return
+    closeCtx()
+    const data = await apiMsg('/chats/message/delete', {
+      phone, chat_id: activeChat.id, message_id: m.id, revoke: !!revoke,
+    })
+    if (data.status === 'success') {
+      setMessages((prev) => prev.filter((x) => x.id !== m.id))
+    } else {
+      pushSystemMsg(data.message || 'Не удалось удалить', true)
+    }
+  }
+
+  const doPin = async (m, unpin) => {
+    if (!phone || !activeChat) return
+    closeCtx()
+    const data = await apiMsg('/chats/message/pin', {
+      phone, chat_id: activeChat.id, message_id: m.id, unpin: !!unpin,
+    })
+    pushSystemMsg(data.message || (data.status === 'success' ? 'OK' : 'Ошибка'), data.status !== 'success')
+  }
+
+  const doReact = async (m, emoticon) => {
+    if (!phone || !activeChat) return
+    setReactMsg(null)
+    closeCtx()
+    const data = await apiMsg('/chats/message/react', {
+      phone, chat_id: activeChat.id, message_id: m.id, emoticon: emoticon || '',
+    })
+    if (data.status === 'success') {
+      await loadMessages(activeChat.id, phone, false)
+    } else {
+      pushSystemMsg(data.message || 'Реакция недоступна', true)
+    }
+  }
+
+  const doForward = async (toChatId) => {
+    if (!phone || !forwardMsg || !activeChat) return
+    const data = await apiMsg('/chats/message/forward', {
+      phone,
+      from_chat_id: activeChat.id,
+      message_id: forwardMsg.id,
+      to_chat_id: toChatId,
+    })
+    setForwardMsg(null)
+    pushSystemMsg(data.message || (data.status === 'success' ? 'Переслано' : 'Ошибка'), data.status !== 'success')
+  }
+
+  const aiReplyDraft = async (m) => {
+    if (!phone || !m?.text) return
+    closeCtx()
+    try {
+      const res = await fetch(`${API_URL}/settings/ai/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone,
+          message: `Напиши короткий ответ на это сообщение (только текст ответа, без пояснений):\n${m.text}`,
+          history: [],
+        }),
+      })
+      const data = await res.json()
+      if (data.status === 'success' && data.reply) {
+        setText(data.reply)
+        setReplyTo({ id: m.id, text: (m.text || '').slice(0, 120), sender: m.sender || '' })
+      } else {
+        pushSystemMsg(data.message || 'ИИ не смог подготовить ответ', true)
+      }
+    } catch (e) {
+      pushSystemMsg('Ошибка ИИ-черновика', true)
+    }
+  }
+
+  const openMsgMenu = (e, m) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const x = e.clientX || (e.touches && e.touches[0]?.clientX) || 40
+    const y = e.clientY || (e.touches && e.touches[0]?.clientY) || 80
+    setCtxMenu({ x, y, msg: m })
+  }
+
+  const onBubbleTouchStart = (e, m) => {
+    longPressRef.current = setTimeout(() => {
+      const t = e.touches?.[0]
+      setCtxMenu({ x: t?.clientX || 40, y: t?.clientY || 80, msg: m })
+    }, 450)
+  }
+  const onBubbleTouchEnd = () => {
+    if (longPressRef.current) clearTimeout(longPressRef.current)
+  }
+
+  const loadDeletedSettings = async () => {
+    if (!phone) return
+    try {
+      const data = await apiMsg('/chats/deleted/get', { phone })
+      if (data.status === 'success') {
+        setSeeDeleted(!!data.enabled)
+        setDeletedList(data.messages || [])
+      }
+    } catch (e) {}
+  }
+
+  const toggleSeeDeleted = async (on) => {
+    if (!phone) return
+    setSeeDeleted(on)
+    await apiMsg('/chats/deleted/settings', { phone, enabled: on })
+  }
+
+  const clearDeleted = async () => {
+    if (!phone) return
+    await apiMsg('/chats/deleted/clear', { phone })
+    setDeletedList([])
+  }
+
+
   // защита от гонки: ответ старого чата не должен перетирать новый
   const messagesReqId = useRef(0)
 
@@ -460,6 +663,9 @@ function App() {
     setMenuOpen(false)
     messagesReqId.current += 1
     setMsgsError('')
+    setReplyTo(null)
+    setEditMsg(null)
+    setCtxMenu(null)
     if (isSystemChat(d.id)) {
       setMsgsLoading(false)
       setMessages(systemMessages)
@@ -681,19 +887,40 @@ function App() {
       return
     }
 
-    // обычная отправка только в реальные чаты
+    // edit mode
+    if (editMsg && !isLocalChat(activeChat.id)) {
+      try {
+        const data = await apiMsg('/chats/message/edit', {
+          phone, chat_id: activeChat.id, message_id: editMsg.id, text: payload,
+        })
+        if (data.status === 'success') {
+          setMessages((prev) => prev.map((m) => (m.id === editMsg.id ? { ...m, text: payload } : m)))
+          setEditMsg(null)
+        } else setError(data.message || 'Не удалось изменить')
+      } catch (e) {
+        setError('Ошибка редактирования')
+      }
+      return
+    }
+
+    // обычная отправка (+ reply_to)
     try {
+      const body = { phone, chat_id: activeChat.id, text: payload }
+      if (replyTo?.id) body.reply_to = replyTo.id
       const res = await fetch(`${API_URL}/chats/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, chat_id: activeChat.id, text: payload }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (data.status === 'success' && data.message) {
+        const msg = { ...data.message }
+        if (replyTo) msg.reply_to = { id: replyTo.id, text: replyTo.text, sender: replyTo.sender }
         setMessages((prev) => {
-          if (prev.some((m) => m.id === data.message.id)) return prev
-          return [...prev, data.message]
+          if (prev.some((m) => m.id === msg.id)) return prev
+          return [...prev, msg]
         })
+        setReplyTo(null)
         loadDialogs(phone, false, true)
       } else setError(typeof data.message === 'string' ? data.message : 'Не отправлено')
     } catch (e) {
@@ -905,7 +1132,7 @@ function App() {
           </div>
           {dialogs.map((d) => (
             <div key={d.id} className={`dialog-item ${activeChat?.id === d.id ? 'active' : ''}`} onClick={() => openChat(d)}>
-              <div className="dialog-avatar">{(d.title || '?')[0]}</div>
+              <Avatar peerId={d.id} title={d.title} phone={phone} size={44} cacheRef={avatarCacheRef} urls={avatarUrls} setUrls={setAvatarUrls} />
               <div className="dialog-body">
                 <div className="dialog-top">
                   <span className="dialog-title">
@@ -934,7 +1161,7 @@ function App() {
                   className={`dialog-item archived ${activeChat?.id === d.id ? 'active' : ''}`}
                   onClick={() => openChat(d)}
                 >
-                  <div className="dialog-avatar">{(d.title || '?')[0]}</div>
+                  <Avatar peerId={d.id} title={d.title} phone={phone} size={44} cacheRef={avatarCacheRef} urls={avatarUrls} setUrls={setAvatarUrls} />
                   <div className="dialog-body">
                     <div className="dialog-top">
                       <span className="dialog-title">
@@ -959,6 +1186,9 @@ function App() {
           <>
             <div className="chat-header">
               <button type="button" className="icon-btn mobile-only" onClick={() => setActiveChat(null)}>←</button>
+              {!isLocalChat(activeChat.id) && (
+                <Avatar peerId={activeChat.id} title={activeChat.title} phone={phone} size={36} cacheRef={avatarCacheRef} urls={avatarUrls} setUrls={setAvatarUrls} />
+              )}
               <span className="chat-title">{activeChat.title}</span>
               <div className="chat-header-badges">
                 {isSystemChat(activeChat.id) ? (
@@ -996,8 +1226,23 @@ function App() {
               {messages.map((m) => (
                 <div
                   key={m.id}
+                  id={'msg-' + m.id}
                   className={`bubble ${m.out ? 'out' : 'in'}${m.system ? ' system' : ''}${m.error ? ' sys-error' : ''}${explodingIds.has(m.id) ? ' explode' : ''}`}
+                  onContextMenu={(e) => !m.system && openMsgMenu(e, m)}
+                  onTouchStart={(e) => !m.system && onBubbleTouchStart(e, m)}
+                  onTouchEnd={onBubbleTouchEnd}
+                  onTouchMove={onBubbleTouchEnd}
+                  onDoubleClick={() => !m.system && !isLocalChat(activeChat.id) && doReact(m, '👍')}
                 >
+                  {m.reply_to && (
+                    <div className="reply-quote" onClick={() => {
+                      const el = document.getElementById('msg-' + m.reply_to.id)
+                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    }}>
+                      <div className="reply-quote-sender">{m.reply_to.sender || 'Сообщение'}</div>
+                      <div className="reply-quote-text">{(m.reply_to.text || ('#' + m.reply_to.id)).slice(0, 80)}</div>
+                    </div>
+                  )}
                   {!m.out && m.sender && (
                     <div className="bubble-sender">
                       {m.sender_username ? (
@@ -1151,6 +1396,19 @@ function App() {
               ))}
               <div ref={messagesEndRef} />
             </div>
+            {(replyTo || editMsg) && !isLocalChat(activeChat.id) && (
+              <div className="composer-extra">
+                {editMsg ? (
+                  <div className="reply-bar">✏️ Редактирование<div className="reply-bar-text">{editMsg.text.slice(0, 60)}</div>
+                    <button type="button" className="icon-btn" onClick={() => { setEditMsg(null); setText('') }}>✕</button>
+                  </div>
+                ) : (
+                  <div className="reply-bar">↩ {replyTo.sender || 'Ответ'}<div className="reply-bar-text">{replyTo.text}</div>
+                    <button type="button" className="icon-btn" onClick={() => setReplyTo(null)}>✕</button>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="composer">
               <button type="button" className={`cmd-toggle ${cmdMode || isLocalChat(activeChat.id) ? 'on' : ''}`} title="Команды" onClick={() => setCmdMode((v) => !v)}>| / |</button>
               <input
@@ -1389,6 +1647,26 @@ function App() {
     if (activeMenu === 'tg-settings') return (
       <div className="panel">
         <h2>Настройки Telegram</h2>
+        <div className="settings-list" style={{marginBottom:16}}>
+          <h3 style={{fontSize:15,margin:'12px 0 8px'}}>Конфиденциальность и сообщения</h3>
+          <div className="settings-row">
+            <span>Видеть удалённые сообщения</span>
+            <label className="switch">
+              <input type="checkbox" checked={seeDeleted} onChange={(e) => toggleSeeDeleted(e.target.checked)} onClick={() => loadDeletedSettings()} />
+            </label>
+          </div>
+          <p className="hint">Сохраняются только сообщения, которые уже были получены, при реальном событии удаления Telegram.</p>
+          <button type="button" className="secondary-panel-btn" onClick={loadDeletedSettings}>Обновить список</button>
+          <button type="button" className="secondary-panel-btn" onClick={clearDeleted}>Очистить сохранённые</button>
+          <ul className="cmd-list" style={{marginTop:12}}>
+            {deletedList.map((d, i) => (
+              <li key={i} className="hint">
+                #{d.id} chat={d.chat_id} {d.sender || ''} {d.text ? String(d.text).slice(0, 60) : '(без текста)'} <em>{d.deleted_at}</em>
+              </li>
+            ))}
+            {deletedList.length === 0 && <li className="hint">Пока пусто</li>}
+          </ul>
+        </div>
         <p className="hint">Параметры сессии и поведения клиента на сайте.</p>
         <div className="settings-list">
           <div className="settings-row"><span>Телефон</span><span className="settings-value">{phone || '—'}</span></div>
@@ -1586,6 +1864,51 @@ function App() {
         </aside>
         <main className="content-area">{error && activeMenu!=='account' && <div className="error banner">{error}</div>}{renderContent()}</main>
       </div>
+
+      {ctxMenu && (
+        <div className="ctx-overlay" onClick={closeCtx} onContextMenu={(e) => { e.preventDefault(); closeCtx() }}>
+          <div className="ctx-menu" style={{ left: Math.min(ctxMenu.x, window.innerWidth - 200), top: Math.min(ctxMenu.y, window.innerHeight - 320) }} onClick={(e) => e.stopPropagation()}>
+            <button type="button" onClick={() => copyMsg(ctxMenu.msg)}>Копировать</button>
+            <button type="button" onClick={() => startReply(ctxMenu.msg)}>Ответить</button>
+            <button type="button" onClick={() => { setForwardMsg(ctxMenu.msg); closeCtx() }}>Переслать</button>
+            {ctxMenu.msg.out && <button type="button" onClick={() => startEdit(ctxMenu.msg)}>Изменить</button>}
+            <button type="button" onClick={() => doPin(ctxMenu.msg, false)}>Закрепить</button>
+            <button type="button" onClick={() => doPin(ctxMenu.msg, true)}>Открепить</button>
+            <button type="button" onClick={() => doDelete(ctxMenu.msg, false)}>Удалить у меня</button>
+            <button type="button" onClick={() => doDelete(ctxMenu.msg, true)}>Удалить у всех</button>
+            <button type="button" onClick={() => { setReactMsg(ctxMenu.msg); closeCtx() }}>Реакция…</button>
+            <button type="button" onClick={() => aiReplyDraft(ctxMenu.msg)}>Ответ ИИ</button>
+          </div>
+        </div>
+      )}
+
+      {reactMsg && (
+        <div className="ctx-overlay" onClick={() => setReactMsg(null)}>
+          <div className="react-panel" onClick={(e) => e.stopPropagation()}>
+            {REACTIONS.map((em) => (
+              <button type="button" key={em} className="react-btn" onClick={() => doReact(reactMsg, em)}>{em}</button>
+            ))}
+            <button type="button" className="link-btn" onClick={() => doReact(reactMsg, '')}>Снять реакцию</button>
+          </div>
+        </div>
+      )}
+
+      {forwardMsg && (
+        <div className="ctx-overlay" onClick={() => setForwardMsg(null)}>
+          <div className="modal-box forward-box" onClick={(e) => e.stopPropagation()}>
+            <h3>Переслать в чат</h3>
+            <div className="forward-list">
+              {dialogs.map((d) => (
+                <button type="button" key={d.id} className="forward-item" onClick={() => doForward(d.id)}>
+                  {d.title}
+                </button>
+              ))}
+              {dialogs.length === 0 && <p className="hint">Нет чатов</p>}
+            </div>
+            <button type="button" className="secondary" onClick={() => setForwardMsg(null)}>Отмена</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
