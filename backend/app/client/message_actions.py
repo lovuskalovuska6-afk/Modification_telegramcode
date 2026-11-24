@@ -34,14 +34,31 @@ def _save_deleted_settings_disk(self) -> None:
 
 
 def record_deleted_message(self, phone: str, payload: dict) -> None:
-    """Only from MessageDeleted events. Merges text from msg cache if available."""
+    """Only from MessageDeleted events. Merges text from msg cache if available.
+
+    Limits (Telegram / Telethon):
+    - In some private chats MessageDeleted may omit chat_id.
+    - Without chat_id we only attach cache text if a single cache entry matches msg id
+      (avoid cross-chat ambiguity).
+    - We never invent deletions from missing history rows.
+    """
     cfg = (self.deleted_settings or {}).get(phone) or {}
     if not cfg.get("enabled", False):
         return
-    # enrich from in-memory cache of recently loaded messages
     cache = getattr(self, "msg_text_cache", {}).get(phone) or {}
-    key = f"{payload.get('chat_id')}:{payload.get('id')}"
-    prev = cache.get(key) or {}
+    mid = payload.get("id")
+    cid = payload.get("chat_id")
+    prev = None
+    if cid is not None and mid is not None:
+        prev = cache.get(f"{cid}:{mid}") or {}
+    elif mid is not None:
+        # ambiguous without chat_id — only use cache if unique id match
+        matches = [v for k, v in cache.items() if k.endswith(f":{mid}")]
+        if len(matches) == 1:
+            prev = matches[0]
+            # do not invent chat_id from cache key unless clearly unique
+        else:
+            prev = {}
     if prev:
         payload = {
             **payload,
@@ -49,10 +66,20 @@ def record_deleted_message(self, phone: str, payload: dict) -> None:
             "sender": prev.get("sender") or payload.get("sender"),
             "date": prev.get("date") or payload.get("date"),
             "out": prev.get("out"),
+            "chat_id_uncertain": cid is None,
         }
+    elif cid is None:
+        payload = {**payload, "chat_id_uncertain": True}
     items = self.deleted_messages.setdefault(phone, [])
-    # dedupe by chat_id+id
-    items = [x for x in items if not (x.get("id") == payload.get("id") and x.get("chat_id") == payload.get("chat_id"))]
+    def _same(x):
+        if x.get("id") != payload.get("id"):
+            return False
+        # if both lack chat_id, treat as same; if one has it, require equal
+        xc, pc = x.get("chat_id"), payload.get("chat_id")
+        if xc is None and pc is None:
+            return True
+        return xc == pc
+    items = [x for x in items if not _same(x)]
     items.append(payload)
     self.deleted_messages[phone] = items[-200:]
     self._save_deleted_disk()
@@ -122,9 +149,28 @@ async def get_avatar(self, phone: str, peer_id: int) -> dict:
                 "mime": "image/jpeg",
                 "peer_id": peer_id,
             }
-        # limit ~200KB for free host
-        if len(data) > 250_000:
-            data = data[:250_000]
+        # Safe resize (never truncate JPEG bytes — that corrupts the file)
+        try:
+            from PIL import Image
+            from io import BytesIO as _B
+            im = Image.open(_B(data))
+            im.thumbnail((160, 160), Image.Resampling.LANCZOS)
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            out = _B()
+            im.save(out, format="JPEG", quality=85, optimize=True)
+            data = out.getvalue()
+        except Exception:
+            # if Pillow missing/broken, keep original only if reasonably small
+            if len(data) > 400_000:
+                return {
+                    "status": "success",
+                    "has_photo": False,
+                    "data_base64": None,
+                    "mime": "image/jpeg",
+                    "peer_id": peer_id,
+                    "message": "avatar too large and resize unavailable",
+                }
         try:
             cache_file.write_bytes(data)
         except Exception:
