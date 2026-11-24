@@ -177,12 +177,17 @@ async def attach_handlers(manager, phone: str, client) -> None:
 
     @client.on(events.MessageDeleted)
     async def _on_deleted(event, _phone=phone):
-        """Реальное событие удаления из Telegram — не путать с отсутствием в истории."""
+        """Реальное событие удаления из Telegram — не путать с отсутствием в истории.
+
+        В части личных чатов event.chat_id может быть None (ограничение Telegram/Telethon).
+        Тогда chat_id=null и запись помечается chat_id_uncertain на стороне record_deleted_message.
+        """
         try:
             cfg = getattr(manager, "deleted_settings", {}).get(_phone) or {}
             if not cfg.get("enabled"):
                 return
             chat_id = getattr(event, "chat_id", None)
+            # some builds expose peer via deleted_ids only; do not invent chat_id
             for mid in (event.deleted_ids or []):
                 payload = {
                     "id": int(mid),
